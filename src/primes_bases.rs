@@ -3,21 +3,23 @@ use crate::storage;
 pub fn run(pal_only: bool, pal: Option<String>) {
     match storage::load_all_primes() {
         Ok(primes) => {
-            // Track palindrome counts for each base (index 0 = base 2, index 34 = base 36)
-            let mut base_palindrome_counts = vec![0; 35];
+            // Track palindrome counts for each base (index 0 = base 2, index 60 = base 62)
+            let mut base_palindrome_counts = vec![0; 61];
 
             // Print header
             let header = vec![
                 "10", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15",
                 "16", "17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29",
-                "30", "31", "32", "33", "34", "35", "36", "total",
+                "30", "31", "32", "33", "34", "35", "36", "37", "38", "39", "40", "41", "42", "43",
+                "44", "45", "46", "47", "48", "49", "50", "51", "52", "53", "54", "55", "56", "57",
+                "58", "59", "60", "61", "62", "total",
             ];
             println!("{}", header.join("\t"));
 
             // Print each prime with tab-separated columns
             for prime in primes {
                 let base_representations: Vec<String> =
-                    (2..=36).map(|base| to_base(prime, base)).collect();
+                    (2..=62).map(|base| to_base(prime, base)).collect();
 
                 // Count palindromes (skip base 10 in base_representations to avoid double counting)
                 let mut palindrome_count = 0;
@@ -106,8 +108,11 @@ fn to_base(mut num: usize, base: usize) -> String {
         let digit = num % base;
         let digit_char = if digit < 10 {
             (digit as u8 + b'0') as char
-        } else {
+        } else if digit < 36 {
             (digit as u8 - 10 + b'A') as char
+        } else {
+            // For bases > 36, use lowercase letters (36='a', 37='b', etc.)
+            (digit as u8 - 36 + b'a') as char
         };
         digits.push(digit_char);
         num /= base;
@@ -229,5 +234,56 @@ mod tests {
         assert!(is_palindrome("1111")); // binary palindrome
         assert!(!is_palindrome("1010")); // not a palindrome
         assert!(is_palindrome("121"));  // base-3 palindrome
+    }
+
+    #[test]
+    fn test_to_base_basic() {
+        // Base 2 (binary)
+        assert_eq!(to_base(5, 2), "101");
+        assert_eq!(to_base(10, 2), "1010");
+
+        // Base 10 (decimal)
+        assert_eq!(to_base(123, 10), "123");
+
+        // Base 16 (hexadecimal)
+        assert_eq!(to_base(255, 16), "FF");
+        assert_eq!(to_base(16, 16), "10");
+    }
+
+    #[test]
+    fn test_to_base_extended() {
+        // Base 36 (0-9, A-Z)
+        assert_eq!(to_base(35, 36), "Z");
+        assert_eq!(to_base(36, 36), "10");
+
+        // Base 37-62 (using lowercase letters for values 36+)
+        assert_eq!(to_base(36, 37), "a"); // value 36 in base 37 is 'a'
+        assert_eq!(to_base(37, 37), "10");
+
+        // Base 62 (0-9, A-Z, a-z)
+        assert_eq!(to_base(61, 62), "z"); // value 61 in base 62 is 'z'
+        assert_eq!(to_base(62, 62), "10");
+        assert_eq!(to_base(0, 62), "0");
+
+        // Additional base 62 examples
+        assert_eq!(to_base(10, 62), "A");  // value 10 is 'A'
+        assert_eq!(to_base(35, 62), "Z");  // value 35 is 'Z'
+        assert_eq!(to_base(36, 62), "a");  // value 36 is 'a'
+    }
+
+    #[test]
+    fn test_to_base_digit_ranges() {
+        // Verify digit representations
+        // 0-9 use '0'-'9'
+        assert_eq!(to_base(9, 10), "9");
+
+        // 10-35 use 'A'-'Z' for bases > 10
+        assert_eq!(to_base(10, 16), "A");
+        assert_eq!(to_base(15, 16), "F");
+        assert_eq!(to_base(35, 36), "Z");
+
+        // 36-61 use 'a'-'z' for bases > 36
+        assert_eq!(to_base(36, 62), "a");
+        assert_eq!(to_base(61, 62), "z");
     }
 }
