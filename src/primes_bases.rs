@@ -157,3 +157,77 @@ fn format_value(s: &str, pal_only: bool) -> String {
         colorize_if_palindrome(s)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_palindrome_empty_string() {
+        assert!(!is_palindrome(""));
+    }
+
+    #[test]
+    fn test_is_palindrome_single_char() {
+        assert!(!is_palindrome("a"));
+        assert!(!is_palindrome("1"));
+    }
+
+    #[test]
+    fn test_is_palindrome_two_chars_same() {
+        assert!(is_palindrome("aa"));
+        assert!(is_palindrome("11"));
+        assert!(is_palindrome("ZZ"));
+    }
+
+    #[test]
+    fn test_is_palindrome_two_chars_different() {
+        assert!(!is_palindrome("ab"));
+        assert!(!is_palindrome("12"));
+    }
+
+    #[test]
+    fn test_is_palindrome_odd_length() {
+        assert!(is_palindrome("aba"));
+        assert!(is_palindrome("12321"));
+        assert!(is_palindrome("racecar"));
+        assert!(is_palindrome("A1A"));
+    }
+
+    #[test]
+    fn test_is_palindrome_even_length() {
+        assert!(is_palindrome("abba"));
+        assert!(is_palindrome("1221"));
+        assert!(is_palindrome("ABCCBA"));
+    }
+
+    #[test]
+    fn test_is_palindrome_non_palindromes() {
+        assert!(!is_palindrome("abc"));
+        assert!(!is_palindrome("123"));
+        assert!(!is_palindrome("hello"));
+        assert!(!is_palindrome("12345"));
+    }
+
+    #[test]
+    fn test_is_palindrome_case_sensitive() {
+        // Function is case-sensitive
+        // These are NOT palindromes because corresponding chars differ in case
+        assert!(!is_palindrome("Aa"));
+        assert!(!is_palindrome("Aba"));
+        assert!(!is_palindrome("aBA"));
+        // These ARE palindromes because all corresponding chars match
+        assert!(is_palindrome("ABA"));
+        assert!(is_palindrome("aba"));
+        assert!(is_palindrome("AbA")); // First and last are both 'A'
+    }
+
+    #[test]
+    fn test_is_palindrome_base_representations() {
+        // Test with actual base representations
+        assert!(is_palindrome("101"));  // binary palindrome
+        assert!(is_palindrome("1111")); // binary palindrome
+        assert!(!is_palindrome("1010")); // not a palindrome
+        assert!(is_palindrome("121"));  // base-3 palindrome
+    }
+}
