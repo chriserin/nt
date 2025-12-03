@@ -1,3 +1,4 @@
+mod pi;
 mod primes;
 mod primes_bases;
 mod storage;
@@ -28,6 +29,11 @@ enum Commands {
         pal_only: bool,
         #[arg(long, help = "Only show rows containing this specific palindrome value")]
         pal: Option<String>,
+    },
+    #[command(about = "Calculate and print pi to a specified number of decimal places")]
+    Pi {
+        #[arg(default_value = "100", help = "Number of decimal places to calculate")]
+        digits: usize,
     },
 }
 
@@ -77,6 +83,9 @@ fn main() {
         }
         Commands::PrimesBases { pal_only, pal } => {
             primes_bases::run(pal_only, pal);
+        }
+        Commands::Pi { digits } => {
+            pi::calculate_and_print(digits);
         }
     }
 }
