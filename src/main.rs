@@ -1,3 +1,4 @@
+mod chain;
 mod pi;
 mod primes;
 mod primes_bases;
@@ -44,6 +45,23 @@ enum Commands {
     Random {
         #[arg(default_value = "100", help = "Number of random digits to generate")]
         digits: usize,
+    },
+    #[command(about = "Build a chain of overlapping primes")]
+    Chain {
+        #[arg(
+            short,
+            long,
+            default_value = "4",
+            help = "Number of digits that overlap between primes"
+        )]
+        overlap: usize,
+        #[arg(
+            short,
+            long,
+            default_value = "100",
+            help = "Target length of the digit chain"
+        )]
+        length: usize,
     },
 }
 
@@ -99,6 +117,9 @@ fn main() {
         }
         Commands::Random { digits } => {
             random::generate_and_scan(digits);
+        }
+        Commands::Chain { overlap, length } => {
+            chain::build_chain(overlap, length);
         }
     }
 }
