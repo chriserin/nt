@@ -1,6 +1,8 @@
 mod pi;
 mod primes;
 mod primes_bases;
+mod random;
+mod scan;
 mod storage;
 
 use clap::{Parser, Subcommand};
@@ -27,12 +29,20 @@ enum Commands {
     PrimesBases {
         #[arg(long, help = "Only display palindromes, show dash for non-palindromes")]
         pal_only: bool,
-        #[arg(long, help = "Only show rows containing this specific palindrome value")]
+        #[arg(
+            long,
+            help = "Only show rows containing this specific palindrome value"
+        )]
         pal: Option<String>,
     },
     #[command(about = "Calculate and print pi to a specified number of decimal places")]
     Pi {
         #[arg(default_value = "100", help = "Number of decimal places to calculate")]
+        digits: usize,
+    },
+    #[command(about = "Generate random digits and search for prime numbers")]
+    Random {
+        #[arg(default_value = "100", help = "Number of random digits to generate")]
         digits: usize,
     },
 }
@@ -86,6 +96,9 @@ fn main() {
         }
         Commands::Pi { digits } => {
             pi::calculate_and_print(digits);
+        }
+        Commands::Random { digits } => {
+            random::generate_and_scan(digits);
         }
     }
 }

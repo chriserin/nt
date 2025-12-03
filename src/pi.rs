@@ -1,6 +1,6 @@
 use rug::Float;
 use rug::ops::Pow;
-use crate::storage;
+use crate::scan;
 
 pub fn calculate_and_print(digits: usize) {
     // Calculate precision needed in bits (roughly 3.32 bits per decimal digit)
@@ -16,68 +16,9 @@ pub fn calculate_and_print(digits: usize) {
 
     // Scan for primes in pi digits
     println!("\nScanning for primes in π...");
-    scan_for_primes(&pi_str);
-}
-
-fn scan_for_primes(pi_str: &str) {
-    // Load primes from primes.txt
-    let primes = match storage::load_all_primes() {
-        Ok(primes) => primes,
-        Err(e) => {
-            eprintln!("Error loading primes.txt: {}", e);
-            return;
-        }
-    };
-
-    // Filter to only primes with 4 or more digits
-    let primes: Vec<usize> = primes.into_iter().filter(|p| *p >= 1000).collect();
-
     // Remove the "3." prefix to work with just the digits
     let pi_digits = pi_str.replace("3.", "3");
-
-    println!("Pi digits to scan: {} digits", pi_digits.len());
-    println!("Number of primes (4+ digits) loaded: {}", primes.len());
-    println!();
-
-    let mut found_primes = Vec::new();
-
-    // Check each prime to see if it appears in pi
-    for prime in &primes {
-        let prime_str = prime.to_string();
-
-        // Find all occurrences of this prime in pi
-        let mut start = 0;
-        while let Some(pos) = pi_digits[start..].find(&prime_str) {
-            let actual_pos = start + pos;
-            found_primes.push((*prime, actual_pos));
-            start = actual_pos + 1;
-        }
-    }
-
-    // Sort by position
-    found_primes.sort_by_key(|(_, pos)| *pos);
-
-    println!("Found {} prime occurrences in π:", found_primes.len());
-    println!();
-    println!("Prime\tPosition\tContext");
-    println!("-----\t--------\t-------");
-
-    for (prime, pos) in found_primes.iter().take(50) {
-        let prime_str = prime.to_string();
-        let context_start = pos.saturating_sub(3);
-        let context_end = (pos + prime_str.len() + 3).min(pi_digits.len());
-        let context = &pi_digits[context_start..context_end];
-
-        // Highlight the prime in context
-        let prefix = &context[0..(pos - context_start)];
-        let suffix = &context[(pos - context_start + prime_str.len())..];
-
-        println!("{}\t{}\t\t{}[{}]{}", prime, pos, prefix, prime_str, suffix);
-    }
-
-    if found_primes.len() > 50 {
-        println!("\n... and {} more", found_primes.len() - 50);
-    }
+    scan::scan_for_primes(&pi_digits);
 }
 
 pub(crate) fn machin_formula(precision: u32) -> Float {
