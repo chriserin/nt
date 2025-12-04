@@ -25,6 +25,8 @@ enum Commands {
         limit: usize,
         #[arg(short, long, default_value = "1", help = "Algorithm variation to use")]
         variation: u32,
+        #[arg(long, help = "Save each prime as an individual property file")]
+        save_as_property: bool,
     },
     #[command(about = "Output primes from primes.txt as different bases")]
     PrimesBases {
@@ -69,7 +71,11 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Primes { limit, variation } => {
+        Commands::Primes {
+            limit,
+            variation,
+            save_as_property,
+        } => {
             let start = Instant::now();
 
             let primes = primes::find_primes(limit, variation);
@@ -79,10 +85,12 @@ fn main() {
                 limit, variation
             );
 
-            for &prime in &primes {
-                match storage::save_property(prime, "prime") {
-                    Ok(_) => println!("Saved: {}.txt", prime),
-                    Err(e) => eprintln!("Error saving {}.txt: {}", prime, e),
+            if save_as_property {
+                for &prime in &primes {
+                    match storage::save_property(prime, "prime") {
+                        Ok(_) => println!("Saved: {}.txt", prime),
+                        Err(e) => eprintln!("Error saving {}.txt: {}", prime, e),
+                    }
                 }
             }
 
