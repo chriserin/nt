@@ -123,7 +123,7 @@ fn main() {
             );
 
             if let Err(e) =
-                storage::log_execution("primes", &limit.to_string(), variation, duration_us)
+                storage::log_execution("primes-all-mem", &limit.to_string(), variation, duration_us)
             {
                 eprintln!("Warning: Failed to log execution: {}", e);
             }
