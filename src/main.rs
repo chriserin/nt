@@ -7,6 +7,8 @@ mod scan;
 mod storage;
 
 use clap::{Parser, Subcommand};
+use std::sync::mpsc;
+use std::thread;
 use std::time::Instant;
 
 #[derive(Parser)]
@@ -21,6 +23,15 @@ struct Cli {
 enum Commands {
     #[command(about = "Find all prime numbers up to a given limit")]
     Primes {
+        #[arg(help = "The upper limit to search for primes")]
+        limit: usize,
+        #[arg(short, long, default_value = "1", help = "Algorithm variation to use")]
+        variation: u32,
+        #[arg(long, help = "Save each prime as an individual property file")]
+        save_as_property: bool,
+    },
+    #[command(about = "Find all prime numbers up to a given limit (storing all in memory)")]
+    PrimesAllMem {
         #[arg(help = "The upper limit to search for primes")]
         limit: usize,
         #[arg(short, long, default_value = "1", help = "Algorithm variation to use")]
@@ -71,7 +82,7 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Primes {
+        Commands::PrimesAllMem {
             limit,
             variation,
             save_as_property,
@@ -107,6 +118,69 @@ fn main() {
 
             println!(
                 "Execution time: {}us ({:.2}ms)",
+                duration_us,
+                duration_us as f64 / 1000.0
+            );
+
+            if let Err(e) =
+                storage::log_execution("primes", &limit.to_string(), variation, duration_us)
+            {
+                eprintln!("Warning: Failed to log execution: {}", e);
+            }
+        }
+        Commands::Primes {
+            limit,
+            variation,
+            save_as_property,
+        } => {
+            let start = Instant::now();
+
+            println!(
+                "Finding primes up to {} (variation {})...",
+                limit, variation
+            );
+
+            // Create channel for streaming primes
+            let (tx, rx) = mpsc::channel();
+
+            // Spawn consumer thread to save primes
+            let consumer_handle =
+                thread::spawn(move || storage::save_primes_streaming(rx, save_as_property));
+
+            // Generate primes and send to consumer thread
+            primes::find_primes_streaming(limit, variation, tx);
+
+            let producer_done = start.elapsed();
+            println!(
+                "\nProducer finished: {}us ({:.2}ms)",
+                producer_done.as_micros(),
+                producer_done.as_micros() as f64 / 1000.0
+            );
+
+            // Wait for consumer to finish and get prime count
+            let prime_count = consumer_handle.join().unwrap();
+
+            let consumer_done = start.elapsed();
+            let consumer_lag = consumer_done - producer_done;
+
+            println!(
+                "Consumer finished: {}us ({:.2}ms)",
+                consumer_done.as_micros(),
+                consumer_done.as_micros() as f64 / 1000.0
+            );
+            println!(
+                "Consumer lag: {}us ({:.2}ms)",
+                consumer_lag.as_micros(),
+                consumer_lag.as_micros() as f64 / 1000.0
+            );
+
+            println!("\nTotal: {} primes found", prime_count);
+
+            let duration = start.elapsed();
+            let duration_us = duration.as_micros();
+
+            println!(
+                "Total execution time: {}us ({:.2}ms)",
                 duration_us,
                 duration_us as f64 / 1000.0
             );

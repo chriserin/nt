@@ -1,13 +1,20 @@
 use chrono::Local;
 use std::env;
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{BufWriter, Write};
 use std::path::PathBuf;
+use std::sync::mpsc::Receiver;
 
 pub fn get_nt_data_dir() -> PathBuf {
     let xdg_data_home = env::var("XDG_DATA_HOME")
         .ok()
-        .and_then(|path| if path.is_empty() { None } else { Some(PathBuf::from(path)) })
+        .and_then(|path| {
+            if path.is_empty() {
+                None
+            } else {
+                Some(PathBuf::from(path))
+            }
+        })
         .or_else(|| {
             env::var("HOME")
                 .ok()
@@ -51,7 +58,6 @@ pub fn save_all_primes(primes: &[usize]) -> std::io::Result<()> {
     fs::write(&primes_path, primes_text)?;
     Ok(())
 }
-
 pub fn load_all_primes() -> std::io::Result<Vec<usize>> {
     let data_dir = get_nt_data_dir();
     let primes_path = data_dir.join("primes.txt");
@@ -65,7 +71,12 @@ pub fn load_all_primes() -> std::io::Result<Vec<usize>> {
     Ok(primes)
 }
 
-pub fn log_execution(subcommand: &str, args: &str, variation: u32, duration_us: u128) -> std::io::Result<()> {
+pub fn log_execution(
+    subcommand: &str,
+    args: &str,
+    variation: u32,
+    duration_us: u128,
+) -> std::io::Result<()> {
     let data_dir = get_nt_data_dir();
     fs::create_dir_all(&data_dir)?;
 
@@ -84,4 +95,61 @@ pub fn log_execution(subcommand: &str, args: &str, variation: u32, duration_us: 
     )?;
 
     Ok(())
+}
+
+/// Save primes from a channel, streaming them to primes.txt one at a time
+/// Optionally saves each prime as an individual property file
+/// Returns the count of primes saved
+pub fn save_primes_streaming(rx: Receiver<usize>, save_as_property: bool) -> usize {
+    let mut count = 0;
+
+    // Open primes.txt in write mode (truncate)
+    let data_dir = get_nt_data_dir();
+    if let Err(e) = fs::create_dir_all(&data_dir) {
+        eprintln!("Error creating data directory: {}", e);
+        return 0;
+    }
+
+    let primes_path = data_dir.join("primes.txt");
+
+    let file = match OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&primes_path)
+    {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("Error opening primes.txt: {}", e);
+            return 0;
+        }
+    };
+
+    // Use BufWriter to buffer writes in memory
+    let mut writer = BufWriter::new(file);
+
+    // Process each prime from the channel
+    for prime in rx {
+        if save_as_property {
+            match save_property(prime, "prime") {
+                Ok(_) => println!("Saved: {}.txt", prime),
+                Err(e) => eprintln!("Error saving {}.txt: {}", prime, e),
+            }
+        }
+
+        // Append prime to primes.txt (buffered)
+        if let Err(e) = writeln!(writer, "{}", prime) {
+            eprintln!("Error writing to primes.txt: {}", e);
+        }
+
+        count += 1;
+    }
+
+    // Flush buffer before returning
+    if let Err(e) = writer.flush() {
+        eprintln!("Error flushing primes.txt: {}", e);
+    }
+
+    println!("\nSaved all primes to primes.txt");
+    count
 }
