@@ -4,6 +4,7 @@ pub fn find_primes_streaming(limit: usize, variation: u32, sender: Sender<usize>
     match variation {
         1 => find_primes_v1_streaming(limit, sender),
         2 => find_primes_v2_streaming(limit, sender),
+        3 => find_primes_v3_streaming(limit, sender),
         _ => {
             eprintln!("Unknown variation {}, using variation 1", variation);
             find_primes_v1_streaming(limit, sender)
@@ -88,6 +89,75 @@ fn find_primes_v2_streaming(limit: usize, sender: Sender<usize>) {
 
     for (i, &is_p) in is_prime.iter().enumerate() {
         if is_p {
+            if sender.send(2 * i + 3).is_err() {
+                break; // Receiver dropped, stop sending
+            }
+        }
+    }
+}
+
+/// Variation 3: Streaming optimization that sends primes as soon as they're confirmed
+///
+/// Sends primes in two phases:
+/// 1. During sieving: Sends primes <= sqrt(limit) immediately before using them as divisors
+/// 2. After sieving: Sends remaining primes > sqrt(limit) that survived the sieve
+///
+/// Benefits:
+/// - Consumer can start processing primes while sieve is still running
+/// - Better concurrency between producer and consumer
+/// - Lower peak memory usage in channel
+fn find_primes_v3_streaming(limit: usize, sender: Sender<usize>) {
+    if limit < 2 {
+        return;
+    }
+    if limit == 2 {
+        let _ = sender.send(2);
+        return;
+    }
+
+    // Send 2 immediately
+    if sender.send(2).is_err() {
+        return;
+    }
+
+    // Array size is half since we only track odd numbers
+    let size = (limit - 1) / 2;
+    let mut is_prime = vec![true; size];
+
+    let sqrt_limit = ((limit as f64).sqrt() as usize - 1) / 2;
+
+    // Phase 1: Sieve and send small primes (up to sqrt(limit))
+    for i in 0..=sqrt_limit {
+        if is_prime[i] {
+            let p = 2 * i + 3;
+
+            // Performance Issues
+            //
+            // Cache locality disruption of hot loop
+            // - Sieving is cache-friendly (sequential array access)
+            // - sender.send() accesses channel internals (different memory)
+            // - CPU cache thrashing between sieve array and channel
+            // Send this prime immediately - we know it's prime for certain
+            if sender.send(p).is_err() {
+                return; // Receiver dropped, stop
+            }
+            // Downsides of sending inside the sieving loop:
+            // - Breaks cache locality
+            // - Adds call overhead
+            // - Prevents compiler optimizations
+
+            // Now mark its multiples as composite
+            let mut j = (p * p - 3) / 2;
+            while j < size {
+                is_prime[j] = false;
+                j += p;
+            }
+        }
+    }
+
+    // Phase 2: Send remaining primes (above sqrt(limit))
+    for i in (sqrt_limit + 1)..size {
+        if is_prime[i] {
             if sender.send(2 * i + 3).is_err() {
                 break; // Receiver dropped, stop sending
             }
