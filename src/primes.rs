@@ -169,6 +169,8 @@ pub fn find_primes(limit: usize, variation: u32) -> Vec<usize> {
     match variation {
         1 => find_primes_v1(limit),
         2 => find_primes_v2(limit),
+        3 => find_primes_v3(limit),
+        4 => find_primes_v4(limit),
         _ => {
             eprintln!("Unknown variation {}, using variation 1", variation);
             find_primes_v1(limit)
@@ -248,6 +250,140 @@ fn find_primes_v2(limit: usize) -> Vec<usize> {
     for (i, &is_p) in is_prime.iter().enumerate() {
         if is_p {
             primes.push(2 * i + 3);
+        }
+    }
+
+    primes
+}
+
+/// Variation 4: Odd-Only + Bit-packed (Combined v2 and v3)
+///
+/// Maximum memory efficiency: Only odd numbers + bit packing
+/// - Memory: 1 bit per odd number (16x savings vs Vec<bool>)
+/// - Time complexity: O(n log log n) + bit manipulation overhead
+/// - Space complexity: O(n/128) - 16x compression
+/// - Index mapping: bit i represents number (2*i + 3)
+fn find_primes_v4(limit: usize) -> Vec<usize> {
+    if limit < 2 {
+        return vec![];
+    }
+    if limit == 2 {
+        return vec![2];
+    }
+
+    // Start with 2
+    let mut primes = vec![2];
+
+    // Only track odd numbers: 3, 5, 7, 9, 11, ...
+    // Index i represents number (2*i + 3)
+    let odd_count = (limit - 1) / 2;
+    let size = (odd_count + 63) / 64; // Number of u64 words needed
+    let mut is_prime = vec![!0_u64; size]; // All bits set to 1 (true)
+
+    // Helper: Get bit at position idx
+    #[inline]
+    fn get_bit(bits: &[u64], idx: usize) -> bool {
+        let word_idx = idx / 64;
+        let bit_idx = idx % 64;
+        (bits[word_idx] & (1_u64 << bit_idx)) != 0
+    }
+
+    // Helper: Clear bit at position idx
+    #[inline]
+    fn clear_bit(bits: &mut [u64], idx: usize) {
+        let word_idx = idx / 64;
+        let bit_idx = idx % 64;
+        bits[word_idx] &= !(1_u64 << bit_idx);
+    }
+
+    let sqrt_limit = ((limit as f64).sqrt() as usize - 1) / 2;
+
+    // Sieve odd numbers
+    for i in 0..=sqrt_limit.min(odd_count - 1) {
+        if get_bit(&is_prime, i) {
+            let p = 2 * i + 3;
+
+            // Mark odd multiples of p as composite
+            let mut j = (p * p - 3) / 2;
+            while j < odd_count {
+                clear_bit(&mut is_prime, j);
+                j += p;
+            }
+        }
+    }
+
+    // Collect all odd primes (optimized: iterate word-by-word, skip to set bits)
+    for word_idx in 0..is_prime.len() {
+        let mut word = is_prime[word_idx];
+
+        while word != 0 {
+            let bit_idx = word.trailing_zeros() as usize;
+            let i = word_idx * 64 + bit_idx;
+
+            if i >= odd_count {
+                break;  // Past the end of valid bits
+            }
+
+            primes.push(2 * i + 3);
+            word &= word - 1;  // Clear the lowest set bit
+        }
+    }
+
+    primes
+}
+
+/// Variation 3: Bit-packed Sieve using Vec<u64>
+///
+/// Uses 1 bit per number (8x memory savings vs Vec<bool>)
+/// - Memory: 1 bit per number (packed in u64 words)
+/// - Time complexity: O(n log log n) + bit manipulation overhead
+/// - Space complexity: O(n/64) - 8x compression vs Vec<bool>
+/// - Aligned for 64-bit operations
+fn find_primes_v3(limit: usize) -> Vec<usize> {
+    if limit < 2 {
+        return vec![];
+    }
+
+    // Each u64 holds 64 bits
+    let size = (limit + 64) / 64;
+    let mut is_prime = vec![!0_u64; size]; // All bits set to 1 (true)
+
+    // Helper: Get bit at position idx
+    #[inline]
+    fn get_bit(bits: &[u64], idx: usize) -> bool {
+        let word_idx = idx / 64;
+        let bit_idx = idx % 64;
+        (bits[word_idx] & (1_u64 << bit_idx)) != 0
+    }
+
+    // Helper: Clear bit at position idx
+    #[inline]
+    fn clear_bit(bits: &mut [u64], idx: usize) {
+        let word_idx = idx / 64;
+        let bit_idx = idx % 64;
+        bits[word_idx] &= !(1_u64 << bit_idx);
+    }
+
+    // 0 and 1 are not prime
+    clear_bit(&mut is_prime, 0);
+    clear_bit(&mut is_prime, 1);
+
+    // Sieve of Eratosthenes
+    for i in 2..=((limit as f64).sqrt() as usize) {
+        if get_bit(&is_prime, i) {
+            let mut j = i * i;
+            while j <= limit {
+                clear_bit(&mut is_prime, j);
+                j += i;
+            }
+        }
+    }
+
+    // Collect all primes
+    let mut primes = Vec::new();
+    for i in 0..=limit {
+        if get_bit(&is_prime, i) {
+            primes.push(i);
         }
     }
 
