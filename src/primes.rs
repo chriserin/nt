@@ -5,6 +5,7 @@ pub fn find_primes_streaming(limit: usize, variation: u32, sender: Sender<usize>
         1 => find_primes_v1_streaming(limit, sender),
         2 => find_primes_v2_streaming(limit, sender),
         3 => find_primes_v3_streaming(limit, sender),
+        4 => find_primes_v4_streaming(limit, sender),
         _ => {
             eprintln!("Unknown variation {}, using variation 1", variation);
             find_primes_v1_streaming(limit, sender)
@@ -161,6 +162,86 @@ fn find_primes_v3_streaming(limit: usize, sender: Sender<usize>) {
             if sender.send(2 * i + 3).is_err() {
                 break; // Receiver dropped, stop sending
             }
+        }
+    }
+}
+
+/// Variation 4: Bit-packed Odd-Only Sieve with Streaming
+///
+/// Maximum memory efficiency with streaming: Only odd numbers + bit packing + sends as found.
+/// - Memory: 1 bit per odd number (16x savings vs Vec<bool>)
+/// - Time complexity: O(n log log n) + bit manipulation overhead
+/// - Space complexity: O(n/128) - 16x compression
+/// - Index mapping: bit i represents number (2*i + 3)
+/// - Streams results to consumer as they're found
+fn find_primes_v4_streaming(limit: usize, sender: Sender<usize>) {
+    if limit < 2 {
+        return;
+    }
+    if limit == 2 {
+        let _ = sender.send(2);
+        return;
+    }
+
+    // Send 2 immediately
+    if sender.send(2).is_err() {
+        return;
+    }
+
+    // Only track odd numbers: 3, 5, 7, 9, 11, ...
+    // Index i represents number (2*i + 3)
+    let odd_count = (limit - 1) / 2;
+    let size = (odd_count + 63) / 64; // Number of u64 words needed
+    let mut is_prime = vec![!0_u64; size]; // All bits set to 1 (true)
+
+    // Helper: Get bit at position idx
+    #[inline]
+    fn get_bit(bits: &[u64], idx: usize) -> bool {
+        let word_idx = idx / 64;
+        let bit_idx = idx % 64;
+        (bits[word_idx] & (1_u64 << bit_idx)) != 0
+    }
+
+    // Helper: Clear bit at position idx
+    #[inline]
+    fn clear_bit(bits: &mut [u64], idx: usize) {
+        let word_idx = idx / 64;
+        let bit_idx = idx % 64;
+        bits[word_idx] &= !(1_u64 << bit_idx);
+    }
+
+    let sqrt_limit = ((limit as f64).sqrt() as usize - 1) / 2;
+
+    // Sieve odd numbers
+    for i in 0..=sqrt_limit.min(odd_count - 1) {
+        if get_bit(&is_prime, i) {
+            let p = 2 * i + 3;
+
+            // Mark odd multiples of p as composite
+            let mut j = (p * p - 3) / 2;
+            while j < odd_count {
+                clear_bit(&mut is_prime, j);
+                j += p;
+            }
+        }
+    }
+
+    // Send all odd primes (optimized: iterate word-by-word, skip to set bits)
+    for word_idx in 0..is_prime.len() {
+        let mut word = is_prime[word_idx];
+
+        while word != 0 {
+            let bit_idx = word.trailing_zeros() as usize;
+            let i = word_idx * 64 + bit_idx;
+
+            if i >= odd_count {
+                break;  // Past the end of valid bits
+            }
+
+            if sender.send(2 * i + 3).is_err() {
+                return; // Receiver dropped, stop sending
+            }
+            word &= word - 1;  // Clear the lowest set bit
         }
     }
 }
