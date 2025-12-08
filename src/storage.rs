@@ -140,9 +140,13 @@ pub fn save_primes_streaming(rx: Receiver<usize>, save_as_property: bool) -> usi
             }
         }
 
-        // Append prime to primes.txt (buffered)
-        if let Err(e) = writeln!(writer, "{}", prime) {
+        // Append prime to primes.txt (buffered) using itoa for speed
+        let mut itoa_buf = itoa::Buffer::new();
+        if let Err(e) = writer.write_all(itoa_buf.format(prime).as_bytes()) {
             eprintln!("Error writing to primes.txt: {}", e);
+        }
+        if let Err(e) = writer.write_all(b"\n") {
+            eprintln!("Error writing newline to primes.txt: {}", e);
         }
 
         count += 1;
@@ -190,11 +194,15 @@ pub fn save_primes_streaming_batched(rx: Receiver<Vec<usize>>) -> usize {
     let mut writer = BufWriter::with_capacity(256 * 1024, file); // 256KB
 
     // Process each segment of primes from the channel
+    let mut itoa_buf = itoa::Buffer::new();
     for segment_primes in rx {
         for prime in segment_primes {
-            // Append prime to primes.txt (buffered)
-            if let Err(e) = writeln!(writer, "{}", prime) {
+            // Append prime to primes.txt (buffered) using itoa for speed
+            if let Err(e) = writer.write_all(itoa_buf.format(prime).as_bytes()) {
                 eprintln!("Error writing to primes.txt: {}", e);
+            }
+            if let Err(e) = writer.write_all(b"\n") {
+                eprintln!("Error writing newline to primes.txt: {}", e);
             }
 
             count += 1;
@@ -245,6 +253,7 @@ pub fn save_primes_streaming_segments(rx: Receiver<SegmentData>, limit: usize) -
     let mut count = 1;
 
     // Process each segment from the channel
+    let mut itoa_buf = itoa::Buffer::new();
     for segment_data in rx {
         // Unpack and write directly (no intermediate Vec allocation!)
         for word_idx in 0..segment_data.bits.len() {
@@ -255,13 +264,16 @@ pub fn save_primes_streaming_segments(rx: Receiver<SegmentData>, limit: usize) -
                 let idx = word_idx * 64 + bit_idx;
 
                 let num = segment_data.low + idx * 2;
-                // Append prime to primes.txt (buffered)
+                // Append prime to primes.txt (buffered) using itoa for speed
                 if num > segment_data.high || num > limit {
                     break;
                 }
 
-                if let Err(e) = writeln!(writer, "{}", num) {
+                if let Err(e) = writer.write_all(itoa_buf.format(num).as_bytes()) {
                     eprintln!("Error writing to primes.txt: {}", e);
+                }
+                if let Err(e) = writer.write_all(b"\n") {
+                    eprintln!("Error writing newline to primes.txt: {}", e);
                 }
                 count += 1;
 
@@ -315,16 +327,35 @@ pub fn save_primes_streaming_segments_parallel(rx: Receiver<SegmentPrimes>) -> u
     let mut segment_buffer: BTreeMap<usize, SegmentPrimes> = BTreeMap::new();
     let mut next_expected_id = 0;
 
-    // Helper function to process a segment
-    let process_segment = |segment_primes: &SegmentPrimes, writer: &mut BufWriter<_>| -> usize {
-        let mut local_count = 0;
+    // String buffer for batch writing (reused across segments)
+    let mut string_buffer = String::with_capacity(2 * 1024 * 1024); // 2MB initial
 
-        // Write primes directly (already unpacked by workers)
+    // Helper function to process a segment
+    let process_segment = |segment_primes: &SegmentPrimes,
+                           writer: &mut BufWriter<_>,
+                           string_buffer: &mut String|
+     -> usize {
+        let local_count = segment_primes.primes.len();
+
+        // Batch write: build string then write once
+        string_buffer.clear();
+
+        // Pre-allocate estimated capacity (avg ~10 bytes per prime with newline)
+        let estimated_size = local_count * 11;
+        if string_buffer.capacity() < estimated_size {
+            string_buffer.reserve(estimated_size - string_buffer.capacity());
+        }
+
+        // Build batch string using itoa (fastest integer formatting)
+        let mut itoa_buf = itoa::Buffer::new();
         for &prime in &segment_primes.primes {
-            if let Err(e) = writeln!(writer, "{}", prime) {
-                eprintln!("Error writing to primes.txt: {}", e);
-            }
-            local_count += 1;
+            string_buffer.push_str(itoa_buf.format(prime));
+            string_buffer.push('\n');
+        }
+
+        // Single write call for entire segment
+        if let Err(e) = writer.write_all(string_buffer.as_bytes()) {
+            eprintln!("Error writing to primes.txt: {}", e);
         }
 
         local_count
@@ -339,14 +370,14 @@ pub fn save_primes_streaming_segments_parallel(rx: Receiver<SegmentPrimes>) -> u
 
         // Process all consecutive segments starting from next_expected_id
         while let Some(seg) = segment_buffer.remove(&next_expected_id) {
-            count += process_segment(&seg, &mut writer);
+            count += process_segment(&seg, &mut writer, &mut string_buffer);
             next_expected_id += 1;
         }
     }
 
     // Process any remaining buffered segments (shouldn't happen if producer is correct)
     while let Some((_, seg)) = segment_buffer.pop_first() {
-        count += process_segment(&seg, &mut writer);
+        count += process_segment(&seg, &mut writer, &mut string_buffer);
     }
 
     // Flush buffer before returning
