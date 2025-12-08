@@ -163,20 +163,61 @@ fn main() {
         } => {
             let start = Instant::now();
 
+            // For variation 5 or 6, round limit up to segment boundary
+            let (effective_limit, original_limit) = if variation == 5 || variation == 6 {
+                if limit < primes::SEGMENT_SIZE_NUMBERS {
+                    eprintln!(
+                        "Variation 5 (segmented sieve) requires limit >= {}",
+                        primes::SEGMENT_SIZE_NUMBERS
+                    );
+                    eprintln!("For smaller limits, use variation 2 or 4 instead.");
+                    return;
+                }
+
+                let rounded_limit = primes::round_to_segment_boundary(limit);
+
+                if rounded_limit != limit {
+                    println!(
+                        "Rounding limit from {} to {} (next segment boundary)",
+                        limit, rounded_limit
+                    );
+                }
+
+                (rounded_limit, limit)
+            } else {
+                (limit, limit)
+            };
+
             println!(
                 "Finding primes up to {} (variation {})...",
-                limit, variation
+                effective_limit, variation
             );
 
-            // Create channel for streaming primes
-            let (tx, rx) = mpsc::channel();
+            // For variation 6, use batched channel; otherwise use single-prime channel
+            let consumer_handle = if variation == 6 {
+                let (tx, rx) = mpsc::channel::<Vec<usize>>();
 
-            // Spawn consumer thread to save primes
-            let consumer_handle =
-                thread::spawn(move || storage::save_primes_streaming(rx, save_as_property));
+                // Spawn consumer thread for batched segments
+                let handle = thread::spawn(move || {
+                    storage::save_primes_streaming_batched(rx, save_as_property)
+                });
 
-            // Generate primes and send to consumer thread
-            primes::find_primes_streaming(limit, variation, tx);
+                // Generate primes and send batched to consumer thread
+                primes::find_primes_v6_streaming(effective_limit, tx);
+
+                handle
+            } else {
+                let (tx, rx) = mpsc::channel();
+
+                // Spawn consumer thread for individual primes
+                let handle =
+                    thread::spawn(move || storage::save_primes_streaming(rx, save_as_property));
+
+                // Generate primes and send to consumer thread
+                primes::find_primes_streaming(effective_limit, variation, tx);
+
+                handle
+            };
 
             let producer_done = start.elapsed();
             println!(
@@ -213,9 +254,12 @@ fn main() {
                 duration_us as f64 / 1000.0
             );
 
-            if let Err(e) =
-                storage::log_execution("primes", &limit.to_string(), variation, duration_us)
-            {
+            if let Err(e) = storage::log_execution(
+                "primes",
+                &original_limit.to_string(),
+                variation,
+                duration_us,
+            ) {
                 eprintln!("Warning: Failed to log execution: {}", e);
             }
         }

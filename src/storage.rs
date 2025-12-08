@@ -153,3 +153,63 @@ pub fn save_primes_streaming(rx: Receiver<usize>, save_as_property: bool) -> usi
     println!("\nSaved all primes to primes.txt");
     count
 }
+
+/// Save primes from a channel that sends batched segments
+/// Receives Vec<usize> instead of individual primes for better performance
+/// Optionally saves each prime as an individual property file
+/// Returns the count of primes saved
+pub fn save_primes_streaming_batched(rx: Receiver<Vec<usize>>, save_as_property: bool) -> usize {
+    let mut count = 0;
+
+    // Open primes.txt in write mode (truncate)
+    let data_dir = get_nt_data_dir();
+    if let Err(e) = fs::create_dir_all(&data_dir) {
+        eprintln!("Error creating data directory: {}", e);
+        return 0;
+    }
+
+    let primes_path = data_dir.join("primes.txt");
+
+    let file = match OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&primes_path)
+    {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("Error opening primes.txt: {}", e);
+            return 0;
+        }
+    };
+
+    // Use BufWriter to buffer writes in memory
+    let mut writer = BufWriter::new(file);
+
+    // Process each segment of primes from the channel
+    for segment_primes in rx {
+        for prime in segment_primes {
+            if save_as_property {
+                match save_property(prime, "prime") {
+                    Ok(_) => println!("Saved: {}.txt", prime),
+                    Err(e) => eprintln!("Error saving {}.txt: {}", prime, e),
+                }
+            }
+
+            // Append prime to primes.txt (buffered)
+            if let Err(e) = writeln!(writer, "{}", prime) {
+                eprintln!("Error writing to primes.txt: {}", e);
+            }
+
+            count += 1;
+        }
+    }
+
+    // Flush buffer before returning
+    if let Err(e) = writer.flush() {
+        eprintln!("Error flushing primes.txt: {}", e);
+    }
+
+    println!("\nSaved all primes to primes.txt");
+    count
+}

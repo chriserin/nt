@@ -16,6 +16,7 @@ pub fn find_primes_streaming(limit: usize, variation: u32, sender: Sender<usize>
         2 => find_primes_v2_streaming(limit, sender),
         3 => find_primes_v3_streaming(limit, sender),
         4 => find_primes_v4_streaming(limit, sender),
+        5 => find_primes_v5_streaming(limit, sender),
         _ => {
             eprintln!("Unknown variation {}, using variation 1", variation);
             find_primes_v1_streaming(limit, sender)
@@ -253,6 +254,195 @@ fn find_primes_v4_streaming(limit: usize, sender: Sender<usize>) {
             }
             word &= word - 1; // Clear the lowest set bit
         }
+    }
+}
+
+/// Variation 5: Segmented Sieve with Streaming
+///
+/// Combines segmented processing with streaming output.
+/// - Memory: O(sqrt(n) + segment_size) instead of O(n)
+/// - Segments are bit-packed and odd-only for efficiency
+/// - Streams primes as each segment completes
+/// - Best for very large limits (billions+)
+/// - Segment size: 32KB (fits in L1 cache)
+fn find_primes_v5_streaming(limit: usize, sender: Sender<usize>) {
+    if limit < 2 {
+        return;
+    }
+    if limit == 2 {
+        let _ = sender.send(2);
+        return;
+    }
+
+    // Step 1: Find small primes up to sqrt(limit) using v2 (odd-only)
+    let sqrt_limit = (limit as f64).sqrt() as usize;
+    let small_primes = find_primes_v2(sqrt_limit);
+
+    // Send all small primes first
+    for &prime in &small_primes {
+        if sender.send(prime).is_err() {
+            return; // Receiver dropped
+        }
+    }
+
+    // Step 2: Process segments (limit is already rounded to segment boundary)
+
+    // Helper function for bit operations
+    #[inline]
+    fn clear_bit(bits: &mut [u64], idx: usize) {
+        let word_idx = idx / 64;
+        let bit_idx = idx % 64;
+        bits[word_idx] &= !(1_u64 << bit_idx);
+    }
+
+    // Start from first odd number after sqrt_limit
+    let mut low = (sqrt_limit + 1) | 1; // Make odd
+    if low % 2 == 0 {
+        low += 1;
+    }
+
+    // Allocate segment buffer once (always full segment size)
+    let segment_words = (SEGMENT_SIZE_BITS + 63) / 64;
+    let mut segment = vec![0_u64; segment_words];
+
+    while low <= limit {
+        // Each segment is exactly SEGMENT_SIZE_NUMBERS (aligned boundary)
+        let high = low + SEGMENT_SIZE_NUMBERS - 1;
+
+        // Reinitialize entire segment (all bits to 1 = prime)
+        segment.fill(!0_u64);
+
+        // Step 3: For each small prime > 2, mark its multiples in this segment
+        for &p in small_primes.iter().skip(1) {
+            // Find first odd multiple of p in [low, high]
+            let mut start = ((low + p - 1) / p) * p;
+            if start % 2 == 0 {
+                start += p; // Make it odd
+            }
+
+            // Mark multiples as composite
+            while start <= high {
+                let idx = (start - low) / 2;
+                clear_bit(&mut segment, idx);
+                start += p * 2; // Skip to next odd multiple
+            }
+        }
+
+        // Step 4: Send primes from this segment
+        for word_idx in 0..segment_words {
+            let mut word = segment[word_idx];
+
+            while word != 0 {
+                let bit_idx = word.trailing_zeros() as usize;
+                let idx = word_idx * 64 + bit_idx;
+
+                let num = low + idx * 2;
+
+                if sender.send(num).is_err() {
+                    return; // Receiver dropped, stop sending
+                }
+
+                word &= word - 1; // Clear lowest set bit
+            }
+        }
+
+        // Move to next segment
+        low = high + 2; // Next odd number
+    }
+}
+
+/// Variation 6: Segmented Sieve with Batched Streaming
+///
+/// Sends entire segments as Vec<usize> for reduced channel overhead.
+/// - Memory: O(sqrt(n) + segment_size) instead of O(n)
+/// - Segments are bit-packed and odd-only for efficiency
+/// - Sends one Vec per segment (massive reduction in channel overhead)
+/// - Best for very large limits (billions+) with parallelization potential
+/// - Segment size: 32KB (fits in L1 cache)
+pub fn find_primes_v6_streaming(limit: usize, sender: Sender<Vec<usize>>) {
+    if limit < 2 {
+        return;
+    }
+    if limit == 2 {
+        let _ = sender.send(vec![2]);
+        return;
+    }
+
+    // Step 1: Find small primes up to sqrt(limit) using v2 (odd-only)
+    let sqrt_limit = (limit as f64).sqrt() as usize;
+    let small_primes = find_primes_v2(sqrt_limit);
+
+    // Send all small primes as first batch
+    if sender.send(small_primes.clone()).is_err() {
+        return; // Receiver dropped
+    }
+
+    // Step 2: Process segments (limit is already rounded to segment boundary)
+
+    // Helper function for bit operations
+    #[inline]
+    fn clear_bit(bits: &mut [u64], idx: usize) {
+        let word_idx = idx / 64;
+        let bit_idx = idx % 64;
+        bits[word_idx] &= !(1_u64 << bit_idx);
+    }
+
+    // Start from first odd number after sqrt_limit
+    let mut low = (sqrt_limit + 1) | 1; // Make odd
+    if low % 2 == 0 {
+        low += 1;
+    }
+
+    // Allocate segment buffer once (always full segment size)
+    let segment_words = (SEGMENT_SIZE_BITS + 63) / 64;
+    let mut segment = vec![0_u64; segment_words];
+
+    while low <= limit {
+        // Each segment is exactly SEGMENT_SIZE_NUMBERS (aligned boundary)
+        let high = low + SEGMENT_SIZE_NUMBERS - 1;
+
+        // Reinitialize entire segment (all bits to 1 = prime)
+        segment.fill(!0_u64);
+
+        // Step 3: For each small prime > 2, mark its multiples in this segment
+        for &p in small_primes.iter().skip(1) {
+            // Find first odd multiple of p in [low, high]
+            let mut start = ((low + p - 1) / p) * p;
+            if start % 2 == 0 {
+                start += p; // Make it odd
+            }
+
+            // Mark multiples as composite
+            while start <= high {
+                let idx = (start - low) / 2;
+                clear_bit(&mut segment, idx);
+                start += p * 2; // Skip to next odd multiple
+            }
+        }
+
+        // Step 4: Collect primes from this segment into a Vec
+        let mut segment_primes = Vec::new();
+        for word_idx in 0..segment_words {
+            let mut word = segment[word_idx];
+
+            while word != 0 {
+                let bit_idx = word.trailing_zeros() as usize;
+                let idx = word_idx * 64 + bit_idx;
+
+                let num = low + idx * 2;
+                segment_primes.push(num);
+
+                word &= word - 1; // Clear lowest set bit
+            }
+        }
+
+        // Send entire segment at once
+        if sender.send(segment_primes).is_err() {
+            return; // Receiver dropped, stop sending
+        }
+
+        // Move to next segment
+        low = high + 2; // Next odd number
     }
 }
 
