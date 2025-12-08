@@ -163,47 +163,57 @@ fn main() {
         } => {
             let start = Instant::now();
 
-            // For variation 5 or 6, round limit up to segment boundary
-            let (effective_limit, original_limit) = if variation == 5 || variation == 6 {
-                if limit < primes::SEGMENT_SIZE_NUMBERS {
-                    eprintln!(
-                        "Variation 5 (segmented sieve) requires limit >= {}",
-                        primes::SEGMENT_SIZE_NUMBERS
-                    );
-                    eprintln!("For smaller limits, use variation 2 or 4 instead.");
-                    return;
-                }
+            // For variation 5, 6, or 7, round limit up to segment boundary
+            let (effective_limit, original_limit) =
+                if variation == 5 || variation == 6 || variation == 7 {
+                    if limit < primes::SEGMENT_SIZE_NUMBERS {
+                        eprintln!(
+                            "Variation {} (segmented sieve) requires limit >= {}",
+                            variation,
+                            primes::SEGMENT_SIZE_NUMBERS
+                        );
+                        eprintln!("For smaller limits, use variation 2 or 4 instead.");
+                        return;
+                    }
 
-                let rounded_limit = primes::round_to_segment_boundary(limit);
+                    let rounded_limit = primes::round_to_segment_boundary(limit);
 
-                if rounded_limit != limit {
-                    println!(
-                        "Rounding limit from {} to {} (next segment boundary)",
-                        limit, rounded_limit
-                    );
-                }
+                    if rounded_limit != limit {
+                        println!(
+                            "Rounding limit from {} to {} (next segment boundary)",
+                            limit, rounded_limit
+                        );
+                    }
 
-                (rounded_limit, limit)
-            } else {
-                (limit, limit)
-            };
+                    (rounded_limit, limit)
+                } else {
+                    (limit, limit)
+                };
 
             println!(
                 "Finding primes up to {} (variation {})...",
                 effective_limit, variation
             );
 
-            // For variation 6, use batched channel; otherwise use single-prime channel
+            // For variation 6, use batched channel; for variation 7, use segment channel; otherwise use single-prime channel
             let consumer_handle = if variation == 6 {
                 let (tx, rx) = mpsc::channel::<Vec<usize>>();
 
                 // Spawn consumer thread for batched segments
-                let handle = thread::spawn(move || {
-                    storage::save_primes_streaming_batched(rx, save_as_property)
-                });
+                let handle = thread::spawn(move || storage::save_primes_streaming_batched(rx));
 
                 // Generate primes and send batched to consumer thread
                 primes::find_primes_v6_streaming(effective_limit, tx);
+
+                handle
+            } else if variation == 7 {
+                let (tx, rx) = mpsc::channel::<primes::SegmentData>();
+
+                // Spawn consumer thread for raw segments (unpacking on consumer side)
+                let handle = thread::spawn(move || storage::save_primes_streaming_segments(rx));
+
+                // Generate primes and send raw segments to consumer thread
+                primes::find_primes_v7_streaming(effective_limit, tx);
 
                 handle
             } else {

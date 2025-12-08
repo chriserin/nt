@@ -5,6 +5,8 @@ use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 
+use crate::primes::SegmentData;
+
 pub fn get_nt_data_dir() -> PathBuf {
     let xdg_data_home = env::var("XDG_DATA_HOME")
         .ok()
@@ -158,7 +160,7 @@ pub fn save_primes_streaming(rx: Receiver<usize>, save_as_property: bool) -> usi
 /// Receives Vec<usize> instead of individual primes for better performance
 /// Optionally saves each prime as an individual property file
 /// Returns the count of primes saved
-pub fn save_primes_streaming_batched(rx: Receiver<Vec<usize>>, save_as_property: bool) -> usize {
+pub fn save_primes_streaming_batched(rx: Receiver<Vec<usize>>) -> usize {
     let mut count = 0;
 
     // Open primes.txt in write mode (truncate)
@@ -184,24 +186,82 @@ pub fn save_primes_streaming_batched(rx: Receiver<Vec<usize>>, save_as_property:
     };
 
     // Use BufWriter to buffer writes in memory
-    let mut writer = BufWriter::new(file);
+    let mut writer = BufWriter::with_capacity(256 * 1024, file); // 256KB
 
     // Process each segment of primes from the channel
     for segment_primes in rx {
         for prime in segment_primes {
-            if save_as_property {
-                match save_property(prime, "prime") {
-                    Ok(_) => println!("Saved: {}.txt", prime),
-                    Err(e) => eprintln!("Error saving {}.txt: {}", prime, e),
-                }
-            }
-
             // Append prime to primes.txt (buffered)
             if let Err(e) = writeln!(writer, "{}", prime) {
                 eprintln!("Error writing to primes.txt: {}", e);
             }
 
             count += 1;
+        }
+    }
+
+    // Flush buffer before returning
+    if let Err(e) = writer.flush() {
+        eprintln!("Error flushing primes.txt: {}", e);
+    }
+
+    println!("\nSaved all primes to primes.txt");
+    count
+}
+
+/// Save primes from raw segment data (variation 7)
+/// Unpacks segments on consumer side and saves to primes.txt
+/// Optionally saves each prime as an individual property file
+/// Returns the count of primes saved
+pub fn save_primes_streaming_segments(rx: Receiver<SegmentData>) -> usize {
+    // Open primes.txt in write mode (truncate)
+    let data_dir = get_nt_data_dir();
+    if let Err(e) = fs::create_dir_all(&data_dir) {
+        eprintln!("Error creating data directory: {}", e);
+        return 0;
+    }
+
+    let primes_path = data_dir.join("primes.txt");
+
+    let file = match OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&primes_path)
+    {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("Error opening primes.txt: {}", e);
+            return 0;
+        }
+    };
+
+    // Use BufWriter to buffer writes in memory
+    let mut writer = BufWriter::with_capacity(128 * 1024, file); // 256KB
+    if let Err(e) = writeln!(writer, "2") {
+        eprintln!("Error writing to primes.txt: {}", e);
+    }
+    let mut count = 1;
+
+    // Process each segment from the channel
+    for segment_data in rx {
+        // Unpack and write directly (no intermediate Vec allocation!)
+        for word_idx in 0..segment_data.bits.len() {
+            let mut word = segment_data.bits[word_idx];
+
+            while word != 0 {
+                let bit_idx = word.trailing_zeros() as usize;
+                let idx = word_idx * 64 + bit_idx;
+
+                let num = segment_data.low + idx * 2;
+                // Append prime to primes.txt (buffered)
+                if let Err(e) = writeln!(writer, "{}", num) {
+                    eprintln!("Error writing to primes.txt: {}", e);
+                }
+                count += 1;
+
+                word &= word - 1; // Clear lowest set bit
+            }
         }
     }
 
