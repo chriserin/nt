@@ -1,5 +1,15 @@
 use std::sync::mpsc::Sender;
 
+// Segment size constants for variation 5 (segmented sieve)
+pub const SEGMENT_SIZE_BITS: usize = 32 * 1024 * 8; // 32KB in bits = 262,144 odd numbers
+pub const SEGMENT_SIZE_NUMBERS: usize = SEGMENT_SIZE_BITS * 2; // 524,288 actual numbers
+
+/// Round a limit up to the next segment boundary for variation 5
+pub fn round_to_segment_boundary(limit: usize) -> usize {
+    println!("SEGMENT_SIZE_NUMBERS: {}", SEGMENT_SIZE_NUMBERS);
+    ((limit + SEGMENT_SIZE_NUMBERS - 1) / SEGMENT_SIZE_NUMBERS) * SEGMENT_SIZE_NUMBERS
+}
+
 pub fn find_primes_streaming(limit: usize, variation: u32, sender: Sender<usize>) {
     match variation {
         1 => find_primes_v1_streaming(limit, sender),
@@ -235,13 +245,13 @@ fn find_primes_v4_streaming(limit: usize, sender: Sender<usize>) {
             let i = word_idx * 64 + bit_idx;
 
             if i >= odd_count {
-                break;  // Past the end of valid bits
+                break; // Past the end of valid bits
             }
 
             if sender.send(2 * i + 3).is_err() {
                 return; // Receiver dropped, stop sending
             }
-            word &= word - 1;  // Clear the lowest set bit
+            word &= word - 1; // Clear the lowest set bit
         }
     }
 }
@@ -252,6 +262,7 @@ pub fn find_primes(limit: usize, variation: u32) -> Vec<usize> {
         2 => find_primes_v2(limit),
         3 => find_primes_v3(limit),
         4 => find_primes_v4(limit),
+        5 => find_primes_v5(limit),
         _ => {
             eprintln!("Unknown variation {}, using variation 1", variation);
             find_primes_v1(limit)
@@ -402,15 +413,104 @@ fn find_primes_v4(limit: usize) -> Vec<usize> {
             let i = word_idx * 64 + bit_idx;
 
             if i >= odd_count {
-                break;  // Past the end of valid bits
+                break; // Past the end of valid bits
             }
 
             primes.push(2 * i + 3);
-            word &= word - 1;  // Clear the lowest set bit
+            word &= word - 1; // Clear the lowest set bit
         }
     }
 
     primes
+}
+
+/// Variation 5: Segmented Sieve with Bit-packing and Odd-only
+///
+/// Processes primes in segments to minimize peak memory usage.
+/// - Memory: O(sqrt(n) + segment_size) instead of O(n)
+/// - Segments are bit-packed and odd-only for efficiency
+/// - Best for very large limits (billions+)
+/// - Segment size: 32KB (fits in L1 cache)
+/// - Time complexity: O(n log log n)
+/// - Space complexity: O(sqrt(n)) peak memory
+fn find_primes_v5(limit: usize) -> Vec<usize> {
+    if limit < 2 {
+        return vec![];
+    }
+    if limit == 2 {
+        return vec![2];
+    }
+
+    // Step 1: Find small primes up to sqrt(limit) using v2 (odd-only)
+    let sqrt_limit = (limit as f64).sqrt() as usize;
+    let small_primes = find_primes_v2(sqrt_limit);
+
+    // Start with all small primes
+    let mut all_primes = small_primes.clone();
+
+    // Step 2: Process segments (limit is already rounded to segment boundary)
+
+    // Helper function for bit operations
+    #[inline]
+    fn clear_bit(bits: &mut [u64], idx: usize) {
+        let word_idx = idx / 64;
+        let bit_idx = idx % 64;
+        bits[word_idx] &= !(1_u64 << bit_idx);
+    }
+
+    // Start from first odd number after sqrt_limit
+    let mut low = (sqrt_limit + 1) | 1; // Make odd
+    if low % 2 == 0 {
+        low += 1;
+    }
+
+    // Allocate segment buffer once (always full segment size)
+    let segment_words = (SEGMENT_SIZE_BITS + 63) / 64;
+    let mut segment = vec![0_u64; segment_words];
+
+    while low <= limit {
+        // Each segment is exactly SEGMENT_SIZE_NUMBERS (aligned boundary)
+        let high = low + SEGMENT_SIZE_NUMBERS - 1;
+
+        // Reinitialize entire segment (all bits to 1 = prime)
+        segment.fill(!0_u64);
+
+        // Step 3: For each small prime > 2, mark its multiples in this segment
+        for &p in small_primes.iter().skip(1) {
+            // Find first odd multiple of p in [low, high]
+            let mut start = ((low + p - 1) / p) * p;
+            if start % 2 == 0 {
+                start += p; // Make it odd
+            }
+
+            // Mark multiples as composite
+            while start <= high {
+                let idx = (start - low) / 2;
+                clear_bit(&mut segment, idx);
+                start += p * 2; // Skip to next odd multiple
+            }
+        }
+
+        // Step 4: Collect primes from this segment
+        for word_idx in 0..segment_words {
+            let mut word = segment[word_idx];
+
+            while word != 0 {
+                let bit_idx = word.trailing_zeros() as usize;
+                let idx = word_idx * 64 + bit_idx;
+
+                let num = low + idx * 2;
+                all_primes.push(num);
+
+                word &= word - 1; // Clear lowest set bit
+            }
+        }
+
+        // Move to next segment
+        low = high + 2; // Next odd number
+    }
+
+    all_primes
 }
 
 /// Variation 3: Bit-packed Sieve using Vec<u64>

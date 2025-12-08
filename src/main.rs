@@ -89,12 +89,37 @@ fn main() {
         } => {
             let start = Instant::now();
 
-            let primes = primes::find_primes(limit, variation);
+            // For variation 5 (segmented sieve), round limit up to segment boundary
+            let (effective_limit, original_limit) = if variation == 5 {
+                if limit < primes::SEGMENT_SIZE_NUMBERS {
+                    eprintln!(
+                        "Variation 5 (segmented sieve) requires limit >= {}",
+                        primes::SEGMENT_SIZE_NUMBERS
+                    );
+                    eprintln!("For smaller limits, use variation 2 or 4 instead.");
+                    return;
+                }
+
+                let rounded_limit = primes::round_to_segment_boundary(limit);
+
+                if rounded_limit != limit {
+                    println!(
+                        "Rounding limit from {} to {} (next segment boundary)",
+                        limit, rounded_limit
+                    );
+                }
+
+                (rounded_limit, limit)
+            } else {
+                (limit, limit)
+            };
 
             println!(
                 "Finding primes up to {} (variation {})...",
-                limit, variation
+                effective_limit, variation
             );
+
+            let primes = primes::find_primes(effective_limit, variation);
 
             if save_as_property {
                 for &prime in &primes {
@@ -122,9 +147,12 @@ fn main() {
                 duration_us as f64 / 1000.0
             );
 
-            if let Err(e) =
-                storage::log_execution("primes-all-mem", &limit.to_string(), variation, duration_us)
-            {
+            if let Err(e) = storage::log_execution(
+                "primes-all-mem",
+                &original_limit.to_string(),
+                variation,
+                duration_us,
+            ) {
                 eprintln!("Warning: Failed to log execution: {}", e);
             }
         }
