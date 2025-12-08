@@ -29,6 +29,12 @@ enum Commands {
         variation: u32,
         #[arg(long, help = "Save each prime as an individual property file")]
         save_as_property: bool,
+        #[arg(
+            short,
+            long,
+            help = "Number of worker threads for parallel processing (variation 8 only)"
+        )]
+        workers: Option<usize>,
     },
     #[command(about = "Find all prime numbers up to a given limit (storing all in memory)")]
     PrimesAllMem {
@@ -160,12 +166,13 @@ fn main() {
             limit,
             variation,
             save_as_property,
+            workers,
         } => {
             let start = Instant::now();
 
-            // For variation 5, 6, or 7, round limit up to segment boundary
+            // For variation 5, 6, 7, or 8, round limit up to segment boundary
             let (effective_limit, original_limit) =
-                if variation == 5 || variation == 6 || variation == 7 {
+                if variation == 5 || variation == 6 || variation == 7 || variation == 8 {
                     if limit < primes::SEGMENT_SIZE_NUMBERS {
                         eprintln!(
                             "Variation {} (segmented sieve) requires limit >= {}",
@@ -195,7 +202,8 @@ fn main() {
                 effective_limit, variation
             );
 
-            // For variation 6, use batched channel; for variation 7, use segment channel; otherwise use single-prime channel
+            // For variation 6, use batched channel; for variation 7, use segment channel;
+            // for variation 8, use parallel segment channel; otherwise use single-prime channel
             let consumer_handle = if variation == 6 {
                 let (tx, rx) = mpsc::channel::<Vec<usize>>();
 
@@ -216,6 +224,27 @@ fn main() {
 
                 // Generate primes and send raw segments to consumer thread
                 primes::find_primes_v7_streaming(effective_limit, tx);
+
+                handle
+            } else if variation == 8 {
+                // Determine number of workers (default to CPU count)
+                let num_workers = workers.unwrap_or_else(|| {
+                    std::thread::available_parallelism()
+                        .map(|n| n.get())
+                        .unwrap_or(4)
+                });
+
+                println!("Using {} worker threads for parallel processing", num_workers);
+
+                let (tx, rx) = mpsc::channel::<primes::SegmentPrimes>();
+
+                // Spawn consumer thread for parallel segments (with reordering)
+                let handle = thread::spawn(move || {
+                    storage::save_primes_streaming_segments_parallel(rx)
+                });
+
+                // Generate primes in parallel and send unpacked segments to consumer thread
+                primes::find_primes_v8_parallel(effective_limit, tx, num_workers);
 
                 handle
             } else {

@@ -1,11 +1,12 @@
 use chrono::Local;
+use std::collections::BTreeMap;
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 
-use crate::primes::SegmentData;
+use crate::primes::{SegmentData, SegmentPrimes};
 
 pub fn get_nt_data_dir() -> PathBuf {
     let xdg_data_home = env::var("XDG_DATA_HOME")
@@ -237,7 +238,7 @@ pub fn save_primes_streaming_segments(rx: Receiver<SegmentData>, limit: usize) -
     };
 
     // Use BufWriter to buffer writes in memory
-    let mut writer = BufWriter::with_capacity(128 * 1024, file); // 256KB
+    let mut writer = BufWriter::with_capacity(128 * 1024, file);
     if let Err(e) = writeln!(writer, "2") {
         eprintln!("Error writing to primes.txt: {}", e);
     }
@@ -275,5 +276,84 @@ pub fn save_primes_streaming_segments(rx: Receiver<SegmentData>, limit: usize) -
     }
 
     println!("\nSaved all primes to primes.txt");
+    count
+}
+
+/// Save primes from unpacked segment data with reordering (variation 8)
+/// Receives segments out-of-order from parallel workers and writes in order
+/// Segments are already unpacked by workers (producer-side unpacking like v6)
+/// Returns the count of primes saved
+pub fn save_primes_streaming_segments_parallel(rx: Receiver<SegmentPrimes>) -> usize {
+    let mut count = 0;
+
+    // Open primes.txt in write mode (truncate)
+    let data_dir = get_nt_data_dir();
+    if let Err(e) = fs::create_dir_all(&data_dir) {
+        eprintln!("Error creating data directory: {}", e);
+        return 0;
+    }
+
+    let primes_path = data_dir.join("primes.txt");
+
+    let file = match OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&primes_path)
+    {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("Error opening primes.txt: {}", e);
+            return 0;
+        }
+    };
+
+    // Use BufWriter with larger buffer for better performance
+    let mut writer = BufWriter::with_capacity(128 * 1024, file);
+
+    // Buffer for out-of-order segments
+    let mut segment_buffer: BTreeMap<usize, SegmentPrimes> = BTreeMap::new();
+    let mut next_expected_id = 0;
+
+    // Helper function to process a segment
+    let process_segment = |segment_primes: &SegmentPrimes, writer: &mut BufWriter<_>| -> usize {
+        let mut local_count = 0;
+
+        // Write primes directly (already unpacked by workers)
+        for &prime in &segment_primes.primes {
+            if let Err(e) = writeln!(writer, "{}", prime) {
+                eprintln!("Error writing to primes.txt: {}", e);
+            }
+            local_count += 1;
+        }
+
+        local_count
+    };
+
+    // Process segments in order
+    for segment_primes in rx {
+        let segment_id = segment_primes.segment_id;
+
+        // Add to buffer
+        segment_buffer.insert(segment_id, segment_primes);
+
+        // Process all consecutive segments starting from next_expected_id
+        while let Some(seg) = segment_buffer.remove(&next_expected_id) {
+            count += process_segment(&seg, &mut writer);
+            next_expected_id += 1;
+        }
+    }
+
+    // Process any remaining buffered segments (shouldn't happen if producer is correct)
+    while let Some((_, seg)) = segment_buffer.pop_first() {
+        count += process_segment(&seg, &mut writer);
+    }
+
+    // Flush buffer before returning
+    if let Err(e) = writer.flush() {
+        eprintln!("Error flushing primes.txt: {}", e);
+    }
+
+    println!("\nSaved all primes to primes.txt (parallel)");
     count
 }
