@@ -210,7 +210,9 @@ fn main() {
                 let (tx, rx) = mpsc::channel::<primes::SegmentData>();
 
                 // Spawn consumer thread for raw segments (unpacking on consumer side)
-                let handle = thread::spawn(move || storage::save_primes_streaming_segments(rx));
+                let handle = thread::spawn(move || {
+                    storage::save_primes_streaming_segments(rx, effective_limit)
+                });
 
                 // Generate primes and send raw segments to consumer thread
                 primes::find_primes_v7_streaming(effective_limit, tx);

@@ -15,6 +15,7 @@ pub fn round_to_segment_boundary(limit: usize) -> usize {
 pub struct SegmentData {
     pub bits: Vec<u64>,
     pub low: usize,
+    pub high: usize,
 }
 
 pub fn find_primes_streaming(limit: usize, variation: u32, sender: Sender<usize>) {
@@ -345,8 +346,10 @@ fn find_primes_v5_streaming(limit: usize, sender: Sender<usize>) {
 
                 let num = low + idx * 2;
 
-                if sender.send(num).is_err() {
-                    return; // Receiver dropped, stop sending
+                if num < limit {
+                    if sender.send(num).is_err() {
+                        return; // Receiver dropped, stop sending
+                    }
                 }
 
                 word &= word - 1; // Clear lowest set bit
@@ -437,7 +440,9 @@ pub fn find_primes_v6_streaming(limit: usize, sender: Sender<Vec<usize>>) {
                 let idx = word_idx * 64 + bit_idx;
 
                 let num = low + idx * 2;
-                segment_primes.push(num);
+                if num < limit {
+                    segment_primes.push(num);
+                }
 
                 word &= word - 1; // Clear lowest set bit
             }
@@ -463,18 +468,6 @@ pub fn find_primes_v6_streaming(limit: usize, sender: Sender<Vec<usize>>) {
 /// - Best for very large limits with parallel consumers
 /// - Segment size: 32KB (fits in L1 cache)
 pub fn find_primes_v7_streaming(limit: usize, sender: Sender<SegmentData>) {
-    if limit < 2 {
-        return;
-    }
-    if limit == 2 {
-        // Send 2 as a special case - already unpacked
-        let _ = sender.send(SegmentData {
-            bits: vec![1_u64], // Single bit set for prime 2
-            low: 2,
-        });
-        return;
-    }
-
     // Step 1: Find small primes up to sqrt(limit) using v2 (odd-only)
     let sqrt_limit = (limit as f64).sqrt() as usize;
     let small_primes = find_primes_v2(sqrt_limit);
@@ -486,6 +479,7 @@ pub fn find_primes_v7_streaming(limit: usize, sender: Sender<SegmentData>) {
         .send(SegmentData {
             bits: small_primes_bits,
             low: 3,
+            high: sqrt_limit,
         })
         .is_err()
     {
@@ -540,6 +534,7 @@ pub fn find_primes_v7_streaming(limit: usize, sender: Sender<SegmentData>) {
             .send(SegmentData {
                 bits: segment.clone(),
                 low,
+                high,
             })
             .is_err()
         {

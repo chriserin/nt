@@ -213,7 +213,7 @@ pub fn save_primes_streaming_batched(rx: Receiver<Vec<usize>>) -> usize {
 /// Unpacks segments on consumer side and saves to primes.txt
 /// Optionally saves each prime as an individual property file
 /// Returns the count of primes saved
-pub fn save_primes_streaming_segments(rx: Receiver<SegmentData>) -> usize {
+pub fn save_primes_streaming_segments(rx: Receiver<SegmentData>, limit: usize) -> usize {
     // Open primes.txt in write mode (truncate)
     let data_dir = get_nt_data_dir();
     if let Err(e) = fs::create_dir_all(&data_dir) {
@@ -255,6 +255,10 @@ pub fn save_primes_streaming_segments(rx: Receiver<SegmentData>) -> usize {
 
                 let num = segment_data.low + idx * 2;
                 // Append prime to primes.txt (buffered)
+                if num > segment_data.high || num > limit {
+                    break;
+                }
+
                 if let Err(e) = writeln!(writer, "{}", num) {
                     eprintln!("Error writing to primes.txt: {}", e);
                 }
