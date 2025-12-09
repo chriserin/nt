@@ -564,11 +564,13 @@ pub fn save_small_primes_binary(primes: &[usize]) -> usize {
     count
 }
 
-/// Dual consumer for variation 9 - Consumer 1 (even segments)
-/// Writes even-numbered segments (2, 4, 6, ...) to primes_1.bin
+/// Dual consumer for variation 9 - Parameterized version
+/// Writes segments to primes_{consumer_id}.bin
+/// - consumer_id=1: even-numbered segments (2, 4, 6, ...)
+/// - consumer_id=2: odd-numbered segments (1, 3, 5, ...)
 /// Binary format: 8 bytes per prime (little-endian u64)
 /// Returns the count of primes saved
-pub fn save_primes_dual_consumer1_binary(rx: Receiver<SegmentPrimes>) -> usize {
+fn save_primes_dual_consumer_binary(rx: Receiver<SegmentPrimes>, consumer_id: u8) -> usize {
     let mut count = 0;
 
     let data_dir = get_nt_data_dir();
@@ -577,7 +579,8 @@ pub fn save_primes_dual_consumer1_binary(rx: Receiver<SegmentPrimes>) -> usize {
         return 0;
     }
 
-    let primes_path = data_dir.join("primes_1.bin");
+    let filename = format!("primes_{}.bin", consumer_id);
+    let primes_path = data_dir.join(&filename);
 
     let file = match OpenOptions::new()
         .create(true)
@@ -587,7 +590,7 @@ pub fn save_primes_dual_consumer1_binary(rx: Receiver<SegmentPrimes>) -> usize {
     {
         Ok(f) => f,
         Err(e) => {
-            eprintln!("Error opening primes_1.bin: {}", e);
+            eprintln!("Error opening {}: {}", filename, e);
             return 0;
         }
     };
@@ -596,112 +599,52 @@ pub fn save_primes_dual_consumer1_binary(rx: Receiver<SegmentPrimes>) -> usize {
 
     // Buffer for out-of-order segments
     let mut segment_buffer: BTreeMap<usize, SegmentPrimes> = BTreeMap::new();
-    let mut next_expected_id = 2; // First even segment
+    // Consumer 1 starts at segment 2 (even), Consumer 2 starts at segment 1 (odd)
+    let mut next_expected_id = consumer_id as usize;
 
     // Helper to process segment
-    let process_segment = |segment_primes: &SegmentPrimes, writer: &mut BufWriter<_>| -> usize {
+    let process_segment = |segment_primes: &SegmentPrimes, writer: &mut BufWriter<_>, filename: &str| -> usize {
         let local_count = segment_primes.primes.len();
         for &prime in &segment_primes.primes {
             let bytes = (prime as u64).to_le_bytes();
             if let Err(e) = writer.write_all(&bytes) {
-                eprintln!("Error writing to primes_1.bin: {}", e);
+                eprintln!("Error writing to {}: {}", filename, e);
             }
         }
         local_count
     };
 
-    // Process segments in order (only even segment_ids)
+    // Process segments in order
     for segment_primes in rx {
         let segment_id = segment_primes.segment_id;
         segment_buffer.insert(segment_id, segment_primes);
 
-        // Process all consecutive even segments
+        // Process all consecutive segments for this consumer
         while let Some(seg) = segment_buffer.remove(&next_expected_id) {
-            count += process_segment(&seg, &mut writer);
-            next_expected_id += 2; // Next even segment
+            count += process_segment(&seg, &mut writer, &filename);
+            next_expected_id += 2; // Skip to next segment for this consumer
         }
     }
 
     // Process remaining
     while let Some((_, seg)) = segment_buffer.pop_first() {
-        count += process_segment(&seg, &mut writer);
+        count += process_segment(&seg, &mut writer, &filename);
     }
 
     if let Err(e) = writer.flush() {
-        eprintln!("Error flushing primes_1.bin: {}", e);
+        eprintln!("Error flushing {}: {}", filename, e);
     }
 
-    println!("Consumer 1: Saved {} primes to primes_1.bin", count);
+    println!("Consumer {}: Saved {} primes to {}", consumer_id, count, filename);
     count
 }
 
-/// Dual consumer for variation 9 - Consumer 2 (odd segments)
-/// Writes odd-numbered segments (1, 3, 5, ...) to primes_2.bin
-/// Binary format: 8 bytes per prime (little-endian u64)
-/// Returns the count of primes saved
+/// Wrapper for dual consumer 1 (even segments)
+pub fn save_primes_dual_consumer1_binary(rx: Receiver<SegmentPrimes>) -> usize {
+    save_primes_dual_consumer_binary(rx, 1)
+}
+
+/// Wrapper for dual consumer 2 (odd segments)
 pub fn save_primes_dual_consumer2_binary(rx: Receiver<SegmentPrimes>) -> usize {
-    let mut count = 0;
-
-    let data_dir = get_nt_data_dir();
-    if let Err(e) = fs::create_dir_all(&data_dir) {
-        eprintln!("Error creating data directory: {}", e);
-        return 0;
-    }
-
-    let primes_path = data_dir.join("primes_2.bin");
-
-    let file = match OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(&primes_path)
-    {
-        Ok(f) => f,
-        Err(e) => {
-            eprintln!("Error opening primes_2.bin: {}", e);
-            return 0;
-        }
-    };
-
-    let mut writer = BufWriter::with_capacity(128 * 1024, file);
-
-    // Buffer for out-of-order segments
-    let mut segment_buffer: BTreeMap<usize, SegmentPrimes> = BTreeMap::new();
-    let mut next_expected_id = 1; // First odd segment
-
-    // Helper to process segment
-    let process_segment = |segment_primes: &SegmentPrimes, writer: &mut BufWriter<_>| -> usize {
-        let local_count = segment_primes.primes.len();
-        for &prime in &segment_primes.primes {
-            let bytes = (prime as u64).to_le_bytes();
-            if let Err(e) = writer.write_all(&bytes) {
-                eprintln!("Error writing to primes_2.bin: {}", e);
-            }
-        }
-        local_count
-    };
-
-    // Process segments in order (only odd segment_ids)
-    for segment_primes in rx {
-        let segment_id = segment_primes.segment_id;
-        segment_buffer.insert(segment_id, segment_primes);
-
-        // Process all consecutive odd segments
-        while let Some(seg) = segment_buffer.remove(&next_expected_id) {
-            count += process_segment(&seg, &mut writer);
-            next_expected_id += 2; // Next odd segment
-        }
-    }
-
-    // Process remaining
-    while let Some((_, seg)) = segment_buffer.pop_first() {
-        count += process_segment(&seg, &mut writer);
-    }
-
-    if let Err(e) = writer.flush() {
-        eprintln!("Error flushing primes_2.bin: {}", e);
-    }
-
-    println!("Consumer 2: Saved {} primes to primes_2.bin", count);
-    count
+    save_primes_dual_consumer_binary(rx, 2)
 }
