@@ -600,7 +600,12 @@ fn pack_primes_to_bits(primes: &[usize]) -> Vec<u64> {
 /// - Best for very large limits on multi-core systems
 /// - Segment size: 32KB (fits in L1 cache per core)
 /// - Scales linearly with CPU cores
-pub fn find_primes_v8_parallel(limit: usize, sqrt_limit: usize, sender: Sender<SegmentPrimes>, num_workers: usize) {
+pub fn find_primes_v8_parallel(
+    limit: usize,
+    sqrt_limit: usize,
+    sender: Sender<SegmentPrimes>,
+    num_workers: usize,
+) {
     if limit < 2 {
         return;
     }
@@ -711,31 +716,29 @@ pub fn find_primes_v8_parallel(limit: usize, sqrt_limit: usize, sender: Sender<S
     });
 }
 
-/// Variation 9: Parallelized Segmented Sieve with Dual Consumer Streaming
-///
-/// Multiple worker threads generate segments in parallel, TWO consumers write alternating segments.
-/// - Small primes written separately to primes_small.bin (by main thread)
-/// - Consumer 1 writes even-numbered segments (2, 4, 6, ...) to primes_1.bin
-/// - Consumer 2 writes odd-numbered segments (1, 3, 5, ...) to primes_2.bin
-/// - Parallelizes both computation AND I/O operations
-/// - Returns small_primes for caller to save
-pub fn find_primes_v9_dual_consumers(
+/// Variation 9 with N consumers: Parallel Segmented Sieve with Multiple Consumers
+/// Distributes segments across N consumers for maximum I/O parallelization
+/// - Parallel workers compute segments
+/// - Segments distributed round-robin to N consumers
+/// - Each consumer writes to primes_{id}.bin
+pub fn find_primes_v9_multi_consumers(
     limit: usize,
     sqrt_limit: usize,
-    sender1: Sender<SegmentPrimes>,
-    sender2: Sender<SegmentPrimes>,
+    senders: Vec<Sender<SegmentPrimes>>,
     num_workers: usize,
 ) -> Vec<usize> {
     if limit < 2 {
         return vec![];
     }
 
+    let num_consumers = senders.len();
+    if num_consumers == 0 {
+        return vec![];
+    }
+
     // Step 1: Find small primes up to sqrt_limit using v2 (odd-only)
     let small_primes_vec = find_primes_v2(sqrt_limit);
     let small_primes = Arc::new(small_primes_vec.clone());
-
-    // Return small primes for caller to save separately
-    // (Caller will save to primes_small.bin)
 
     // Step 2: Calculate segment ranges
     let mut low = (sqrt_limit + 1) | 1; // Make odd
@@ -756,8 +759,7 @@ pub fn find_primes_v9_dual_consumers(
 
     thread::scope(|scope| {
         for worker_id in 0..num_workers {
-            let sender1 = sender1.clone();
-            let sender2 = sender2.clone();
+            let senders = senders.clone();
             let small_primes = Arc::clone(&small_primes);
 
             scope.spawn(move || {
@@ -776,15 +778,6 @@ pub fn find_primes_v9_dual_consumers(
                 for segment_idx in (worker_id..total_segments).step_by(num_workers) {
                     let seg_low = low + segment_idx * SEGMENT_SIZE_NUMBERS;
                     let seg_high = (seg_low + SEGMENT_SIZE_NUMBERS - 1).min(limit);
-                    if seg_high != (seg_low + SEGMENT_SIZE_NUMBERS - 1) {
-                        let panic_message = format!(
-                            "Segment size misalignment detected! seg_low: {}, seg_high: {}, expected high: {}",
-                            seg_low,
-                            seg_high,
-                            seg_low + SEGMENT_SIZE_NUMBERS - 1
-                        );
-                        panic!("{}", panic_message);
-                    }
 
                     // Reinitialize segment (all bits to 1 = prime)
                     segment.fill(!0_u64);
@@ -815,7 +808,9 @@ pub fn find_primes_v9_dual_consumers(
                             let idx = word_idx * 64 + bit_idx;
 
                             let num = seg_low + idx * 2;
-                            segment_primes.push(num);
+                            if num <= seg_high {
+                                segment_primes.push(num);
+                            }
 
                             word &= word - 1; // Clear lowest set bit
                         }
@@ -828,15 +823,9 @@ pub fn find_primes_v9_dual_consumers(
                         segment_id,
                     };
 
-                    // Odd segment_ids (1, 3, 5, ...) to consumer 2
-                    // Even segment_ids (2, 4, 6, ...) to consumer 1
-                    let result = if segment_id % 2 == 1 {
-                        sender2.send(segment_data)
-                    } else {
-                        sender1.send(segment_data)
-                    };
-
-                    if result.is_err() {
+                    // Route to consumer based on segment_id: segment S → consumer ((S-1) % N)
+                    let consumer_idx = ((segment_id - 1) % num_consumers) as usize;
+                    if senders[consumer_idx].send(segment_data).is_err() {
                         return; // Receiver dropped, stop this worker
                     }
                 }

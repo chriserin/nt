@@ -32,7 +32,7 @@ enum Commands {
         #[arg(
             short,
             long,
-            help = "Number of worker threads for parallel processing (variation 8 only)"
+            help = "Number of worker threads for parallel processing (variation 8+ only)"
         )]
         workers: Option<usize>,
         #[arg(
@@ -41,6 +41,12 @@ enum Commands {
             help = "Save primes in binary format (8 bytes per prime, little-endian)"
         )]
         binary: bool,
+        #[arg(
+            long,
+            default_value = "2",
+            help = "Number of consumer threads for parallel I/O (variation 9 only)"
+        )]
+        consumers: usize,
     },
     #[command(about = "Find all prime numbers up to a given limit (storing all in memory)")]
     PrimesAllMem {
@@ -179,6 +185,7 @@ fn main() {
             save_as_property,
             workers,
             binary,
+            consumers,
         } => {
             let start = Instant::now();
 
@@ -275,10 +282,15 @@ fn main() {
 
                 handle
             } else if variation == 9 {
-                // Variation 9: Dual consumers for parallel I/O
+                // Variation 9: Multiple consumers for parallel I/O
                 // Only binary format supported for v9
                 if !binary {
-                    eprintln!("Variation 9 requires --binary flag (writes to primes_small.bin, primes_1.bin, primes_2.bin)");
+                    eprintln!("Variation 9 requires --binary flag");
+                    return;
+                }
+
+                if consumers < 1 {
+                    eprintln!("Number of consumers must be at least 1");
                     return;
                 }
 
@@ -289,43 +301,53 @@ fn main() {
                         .unwrap_or(4)
                 });
 
-                println!("Using {} worker threads with 2 consumers for parallel I/O", num_workers);
+                println!("Using {} worker threads with {} consumers for parallel I/O", num_workers, consumers);
 
-                let (tx1, rx1) = mpsc::channel::<primes::SegmentPrimes>();
-                let (tx2, rx2) = mpsc::channel::<primes::SegmentPrimes>();
+                // Create channels for each consumer
+                let mut senders = Vec::new();
+                let mut consumer_handles = Vec::new();
 
-                // Spawn consumer 1 (even segments)
-                let consumer1 = thread::spawn(move || {
-                    storage::save_primes_dual_consumer1_binary(rx1)
-                });
+                for consumer_id in 1..=consumers {
+                    let (tx, rx) = mpsc::channel::<primes::SegmentPrimes>();
+                    senders.push(tx);
 
-                // Spawn consumer 2 (odd segments)
-                let consumer2 = thread::spawn(move || {
-                    storage::save_primes_dual_consumer2_binary(rx2)
-                });
+                    // Spawn consumer thread
+                    let handle = thread::spawn(move || {
+                        storage::save_primes_multi_consumer_binary(rx, consumer_id, consumers)
+                    });
+                    consumer_handles.push(handle);
+                }
 
                 // Generate primes and get small_primes back (blocks until producer done)
-                let small_primes = primes::find_primes_v9_dual_consumers(
+                let small_primes = primes::find_primes_v9_multi_consumers(
                     effective_limit,
                     sqrt_limit,
-                    tx1,
-                    tx2,
+                    senders,
                     num_workers,
                 );
 
-                // Return handle that waits for both consumers and computes total
+                // Return handle that waits for all consumers and computes total
                 // Save small primes in this thread to avoid affecting producer timing
                 thread::spawn(move || {
                     // Save small primes while consumers are working
                     let small_count = storage::save_small_primes_binary(&small_primes);
 
-                    // Wait for both consumers to finish
-                    let count1 = consumer1.join().unwrap();
-                    let count2 = consumer2.join().unwrap();
+                    // Wait for all consumers to finish
+                    let mut consumer_counts = Vec::new();
+                    for (i, handle) in consumer_handles.into_iter().enumerate() {
+                        let count = handle.join().unwrap();
+                        consumer_counts.push((i + 1, count));
+                    }
 
-                    let total = small_count + count1 + count2;
-                    println!("Total primes: {} (small: {}, consumer1: {}, consumer2: {})",
-                        total, small_count, count1, count2);
+                    let consumers_total: usize = consumer_counts.iter().map(|(_, c)| c).sum();
+                    let total = small_count + consumers_total;
+
+                    print!("Total primes: {} (small: {}", total, small_count);
+                    for (id, count) in consumer_counts {
+                        print!(", consumer{}: {}", id, count);
+                    }
+                    println!(")");
+
                     total
                 })
             } else {

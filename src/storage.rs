@@ -564,13 +564,16 @@ pub fn save_small_primes_binary(primes: &[usize]) -> usize {
     count
 }
 
-/// Dual consumer for variation 9 - Parameterized version
+/// Multi-consumer for variation 9 with N consumers
 /// Writes segments to primes_{consumer_id}.bin
-/// - consumer_id=1: even-numbered segments (2, 4, 6, ...)
-/// - consumer_id=2: odd-numbered segments (1, 3, 5, ...)
+/// Each consumer processes segments where (segment_id - 1) % num_consumers == (consumer_id - 1)
 /// Binary format: 8 bytes per prime (little-endian u64)
 /// Returns the count of primes saved
-fn save_primes_dual_consumer_binary(rx: Receiver<SegmentPrimes>, consumer_id: u8) -> usize {
+pub fn save_primes_multi_consumer_binary(
+    rx: Receiver<SegmentPrimes>,
+    consumer_id: usize,
+    num_consumers: usize,
+) -> usize {
     let mut count = 0;
 
     let data_dir = get_nt_data_dir();
@@ -599,20 +602,22 @@ fn save_primes_dual_consumer_binary(rx: Receiver<SegmentPrimes>, consumer_id: u8
 
     // Buffer for out-of-order segments
     let mut segment_buffer: BTreeMap<usize, SegmentPrimes> = BTreeMap::new();
-    // Consumer 1 starts at segment 2 (even), Consumer 2 starts at segment 1 (odd)
-    let mut next_expected_id = consumer_id as usize;
+    // This consumer handles segments where (segment_id - 1) % num_consumers == (consumer_id - 1)
+    // So first segment is consumer_id, next is consumer_id + num_consumers, etc.
+    let mut next_expected_id = consumer_id;
 
     // Helper to process segment
-    let process_segment = |segment_primes: &SegmentPrimes, writer: &mut BufWriter<_>, filename: &str| -> usize {
-        let local_count = segment_primes.primes.len();
-        for &prime in &segment_primes.primes {
-            let bytes = (prime as u64).to_le_bytes();
-            if let Err(e) = writer.write_all(&bytes) {
-                eprintln!("Error writing to {}: {}", filename, e);
+    let process_segment =
+        |segment_primes: &SegmentPrimes, writer: &mut BufWriter<_>, filename: &str| -> usize {
+            let local_count = segment_primes.primes.len();
+            for &prime in &segment_primes.primes {
+                let bytes = (prime as u64).to_le_bytes();
+                if let Err(e) = writer.write_all(&bytes) {
+                    eprintln!("Error writing to {}: {}", filename, e);
+                }
             }
-        }
-        local_count
-    };
+            local_count
+        };
 
     // Process segments in order
     for segment_primes in rx {
@@ -622,7 +627,7 @@ fn save_primes_dual_consumer_binary(rx: Receiver<SegmentPrimes>, consumer_id: u8
         // Process all consecutive segments for this consumer
         while let Some(seg) = segment_buffer.remove(&next_expected_id) {
             count += process_segment(&seg, &mut writer, &filename);
-            next_expected_id += 2; // Skip to next segment for this consumer
+            next_expected_id += num_consumers; // Skip to next segment for this consumer
         }
     }
 
@@ -635,16 +640,9 @@ fn save_primes_dual_consumer_binary(rx: Receiver<SegmentPrimes>, consumer_id: u8
         eprintln!("Error flushing {}: {}", filename, e);
     }
 
-    println!("Consumer {}: Saved {} primes to {}", consumer_id, count, filename);
+    println!(
+        "Consumer {}: Saved {} primes to {}",
+        consumer_id, count, filename
+    );
     count
-}
-
-/// Wrapper for dual consumer 1 (even segments)
-pub fn save_primes_dual_consumer1_binary(rx: Receiver<SegmentPrimes>) -> usize {
-    save_primes_dual_consumer_binary(rx, 1)
-}
-
-/// Wrapper for dual consumer 2 (odd segments)
-pub fn save_primes_dual_consumer2_binary(rx: Receiver<SegmentPrimes>) -> usize {
-    save_primes_dual_consumer_binary(rx, 2)
 }
