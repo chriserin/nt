@@ -303,6 +303,9 @@ fn main() {
 
                 println!("Using {} worker threads with {} consumers for parallel I/O", num_workers, consumers);
 
+                // Remove all existing primes_*.bin files to avoid leftover files from previous runs
+                storage::cleanup_prime_files();
+
                 // Create channels for each consumer
                 let mut senders = Vec::new();
                 let mut consumer_handles = Vec::new();

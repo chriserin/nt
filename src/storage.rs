@@ -8,6 +8,24 @@ use std::sync::mpsc::Receiver;
 
 use crate::primes::{SegmentData, SegmentPrimes};
 
+/// Remove all primes_*.bin files from the data directory
+/// Used to clean up before variation 9 runs to avoid leftover files from previous runs
+pub fn cleanup_prime_files() {
+    if let Ok(data_dir) = get_nt_data_dir().canonicalize() {
+        if let Ok(entries) = fs::read_dir(&data_dir) {
+            for entry in entries.flatten() {
+                if let Some(filename) = entry.file_name().to_str() {
+                    if filename.starts_with("primes_") && filename.ends_with(".bin") {
+                        if let Err(e) = fs::remove_file(entry.path()) {
+                            eprintln!("Warning: Could not remove old file {}: {}", filename, e);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 pub fn get_nt_data_dir() -> PathBuf {
     let xdg_data_home = env::var("XDG_DATA_HOME")
         .ok()
