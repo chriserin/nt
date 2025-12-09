@@ -177,9 +177,9 @@ fn main() {
         } => {
             let start = Instant::now();
 
-            // For variation 5, 6, 7, or 8, round limit up to segment boundary
+            // For variation 5, 6, 7, 8, or 9, round limit up to segment boundary
             let (effective_limit, original_limit) =
-                if variation == 5 || variation == 6 || variation == 7 || variation == 8 {
+                if variation == 5 || variation == 6 || variation == 7 || variation == 8 || variation == 9 {
                     if limit < primes::SEGMENT_SIZE_NUMBERS {
                         eprintln!(
                             "Variation {} (segmented sieve) requires limit >= {}",
@@ -264,6 +264,56 @@ fn main() {
                 primes::find_primes_v8_parallel(effective_limit, tx, num_workers);
 
                 handle
+            } else if variation == 9 {
+                // Variation 9: Dual consumers for parallel I/O
+                // Only binary format supported for v9
+                if !binary {
+                    eprintln!("Variation 9 requires --binary flag (writes to primes_small.bin, primes_1.bin, primes_2.bin)");
+                    return;
+                }
+
+                // Determine number of workers (default to CPU count)
+                let num_workers = workers.unwrap_or_else(|| {
+                    std::thread::available_parallelism()
+                        .map(|n| n.get())
+                        .unwrap_or(4)
+                });
+
+                println!("Using {} worker threads with 2 consumers for parallel I/O", num_workers);
+
+                let (tx1, rx1) = mpsc::channel::<primes::SegmentPrimes>();
+                let (tx2, rx2) = mpsc::channel::<primes::SegmentPrimes>();
+
+                // Spawn consumer 1 (even segments)
+                let consumer1 = thread::spawn(move || {
+                    storage::save_primes_dual_consumer1_binary(rx1)
+                });
+
+                // Spawn consumer 2 (odd segments)
+                let consumer2 = thread::spawn(move || {
+                    storage::save_primes_dual_consumer2_binary(rx2)
+                });
+
+                // Generate primes and get small_primes back
+                let small_primes = primes::find_primes_v9_dual_consumers(
+                    effective_limit,
+                    tx1,
+                    tx2,
+                    num_workers,
+                );
+
+                // Save small primes to primes_small.bin
+                let small_count = storage::save_small_primes_binary(&small_primes);
+
+                // Wait for both consumers
+                let count1 = consumer1.join().unwrap();
+                let count2 = consumer2.join().unwrap();
+
+                println!("\nTotal primes: {} (small: {}, consumer1: {}, consumer2: {})",
+                    small_count + count1 + count2, small_count, count1, count2);
+
+                // Create dummy handle for consistency
+                thread::spawn(move || small_count + count1 + count2)
             } else {
                 let (tx, rx) = mpsc::channel();
 

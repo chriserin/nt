@@ -520,3 +520,188 @@ pub fn save_primes_streaming_batched_binary(rx: Receiver<Vec<usize>>) -> usize {
     println!("\nSaved all primes to primes.bin (binary format)");
     count
 }
+
+/// Save small primes to primes_small.bin (for variation 9)
+/// Binary format: 8 bytes per prime (little-endian u64)
+/// Returns the count of primes saved
+pub fn save_small_primes_binary(primes: &[usize]) -> usize {
+    let data_dir = get_nt_data_dir();
+    if let Err(e) = fs::create_dir_all(&data_dir) {
+        eprintln!("Error creating data directory: {}", e);
+        return 0;
+    }
+
+    let primes_path = data_dir.join("primes_small.bin");
+
+    let file = match OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&primes_path)
+    {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("Error opening primes_small.bin: {}", e);
+            return 0;
+        }
+    };
+
+    let mut writer = BufWriter::with_capacity(64 * 1024, file);
+
+    for &prime in primes {
+        let bytes = (prime as u64).to_le_bytes();
+        if let Err(e) = writer.write_all(&bytes) {
+            eprintln!("Error writing to primes_small.bin: {}", e);
+        }
+    }
+
+    if let Err(e) = writer.flush() {
+        eprintln!("Error flushing primes_small.bin: {}", e);
+    }
+
+    let count = primes.len();
+    println!("Saved {} small primes to primes_small.bin", count);
+    count
+}
+
+/// Dual consumer for variation 9 - Consumer 1 (even segments)
+/// Writes even-numbered segments (2, 4, 6, ...) to primes_1.bin
+/// Binary format: 8 bytes per prime (little-endian u64)
+/// Returns the count of primes saved
+pub fn save_primes_dual_consumer1_binary(rx: Receiver<SegmentPrimes>) -> usize {
+    let mut count = 0;
+
+    let data_dir = get_nt_data_dir();
+    if let Err(e) = fs::create_dir_all(&data_dir) {
+        eprintln!("Error creating data directory: {}", e);
+        return 0;
+    }
+
+    let primes_path = data_dir.join("primes_1.bin");
+
+    let file = match OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&primes_path)
+    {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("Error opening primes_1.bin: {}", e);
+            return 0;
+        }
+    };
+
+    let mut writer = BufWriter::with_capacity(128 * 1024, file);
+
+    // Buffer for out-of-order segments
+    let mut segment_buffer: BTreeMap<usize, SegmentPrimes> = BTreeMap::new();
+    let mut next_expected_id = 2; // First even segment
+
+    // Helper to process segment
+    let process_segment = |segment_primes: &SegmentPrimes, writer: &mut BufWriter<_>| -> usize {
+        let local_count = segment_primes.primes.len();
+        for &prime in &segment_primes.primes {
+            let bytes = (prime as u64).to_le_bytes();
+            if let Err(e) = writer.write_all(&bytes) {
+                eprintln!("Error writing to primes_1.bin: {}", e);
+            }
+        }
+        local_count
+    };
+
+    // Process segments in order (only even segment_ids)
+    for segment_primes in rx {
+        let segment_id = segment_primes.segment_id;
+        segment_buffer.insert(segment_id, segment_primes);
+
+        // Process all consecutive even segments
+        while let Some(seg) = segment_buffer.remove(&next_expected_id) {
+            count += process_segment(&seg, &mut writer);
+            next_expected_id += 2; // Next even segment
+        }
+    }
+
+    // Process remaining
+    while let Some((_, seg)) = segment_buffer.pop_first() {
+        count += process_segment(&seg, &mut writer);
+    }
+
+    if let Err(e) = writer.flush() {
+        eprintln!("Error flushing primes_1.bin: {}", e);
+    }
+
+    println!("Consumer 1: Saved {} primes to primes_1.bin", count);
+    count
+}
+
+/// Dual consumer for variation 9 - Consumer 2 (odd segments)
+/// Writes odd-numbered segments (1, 3, 5, ...) to primes_2.bin
+/// Binary format: 8 bytes per prime (little-endian u64)
+/// Returns the count of primes saved
+pub fn save_primes_dual_consumer2_binary(rx: Receiver<SegmentPrimes>) -> usize {
+    let mut count = 0;
+
+    let data_dir = get_nt_data_dir();
+    if let Err(e) = fs::create_dir_all(&data_dir) {
+        eprintln!("Error creating data directory: {}", e);
+        return 0;
+    }
+
+    let primes_path = data_dir.join("primes_2.bin");
+
+    let file = match OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&primes_path)
+    {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("Error opening primes_2.bin: {}", e);
+            return 0;
+        }
+    };
+
+    let mut writer = BufWriter::with_capacity(128 * 1024, file);
+
+    // Buffer for out-of-order segments
+    let mut segment_buffer: BTreeMap<usize, SegmentPrimes> = BTreeMap::new();
+    let mut next_expected_id = 1; // First odd segment
+
+    // Helper to process segment
+    let process_segment = |segment_primes: &SegmentPrimes, writer: &mut BufWriter<_>| -> usize {
+        let local_count = segment_primes.primes.len();
+        for &prime in &segment_primes.primes {
+            let bytes = (prime as u64).to_le_bytes();
+            if let Err(e) = writer.write_all(&bytes) {
+                eprintln!("Error writing to primes_2.bin: {}", e);
+            }
+        }
+        local_count
+    };
+
+    // Process segments in order (only odd segment_ids)
+    for segment_primes in rx {
+        let segment_id = segment_primes.segment_id;
+        segment_buffer.insert(segment_id, segment_primes);
+
+        // Process all consecutive odd segments
+        while let Some(seg) = segment_buffer.remove(&next_expected_id) {
+            count += process_segment(&seg, &mut writer);
+            next_expected_id += 2; // Next odd segment
+        }
+    }
+
+    // Process remaining
+    while let Some((_, seg)) = segment_buffer.pop_first() {
+        count += process_segment(&seg, &mut writer);
+    }
+
+    if let Err(e) = writer.flush() {
+        eprintln!("Error flushing primes_2.bin: {}", e);
+    }
+
+    println!("Consumer 2: Saved {} primes to primes_2.bin", count);
+    count
+}

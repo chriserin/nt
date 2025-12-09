@@ -720,6 +720,135 @@ pub fn find_primes_v8_parallel(limit: usize, sender: Sender<SegmentPrimes>, num_
     });
 }
 
+/// Variation 9: Parallelized Segmented Sieve with Dual Consumer Streaming
+///
+/// Multiple worker threads generate segments in parallel, TWO consumers write alternating segments.
+/// - Small primes written separately to primes_small.bin (by main thread)
+/// - Consumer 1 writes even-numbered segments (2, 4, 6, ...) to primes_1.bin
+/// - Consumer 2 writes odd-numbered segments (1, 3, 5, ...) to primes_2.bin
+/// - Parallelizes both computation AND I/O operations
+/// - Returns small_primes for caller to save
+pub fn find_primes_v9_dual_consumers(
+    limit: usize,
+    sender1: Sender<SegmentPrimes>,
+    sender2: Sender<SegmentPrimes>,
+    num_workers: usize,
+) -> Vec<usize> {
+    if limit < 2 {
+        return vec![];
+    }
+
+    // Step 1: Find small primes up to sqrt(limit) using v2 (odd-only)
+    let sqrt_limit = (limit as f64).sqrt() as usize;
+    let small_primes_vec = find_primes_v2(sqrt_limit);
+    let small_primes = Arc::new(small_primes_vec.clone());
+
+    // Return small primes for caller to save separately
+    // (Caller will save to primes_small.bin)
+
+    // Step 2: Calculate segment ranges
+    let mut low = (sqrt_limit + 1) | 1; // Make odd
+    if low % 2 == 0 {
+        low += 1;
+    }
+
+    // Calculate total number of segments
+    let total_range = if limit >= low {
+        limit - low + 1
+    } else {
+        return small_primes_vec; // No segments needed, just small primes
+    };
+    let total_segments = (total_range + SEGMENT_SIZE_NUMBERS - 1) / SEGMENT_SIZE_NUMBERS;
+
+    // Step 3: Spawn worker threads
+    let segment_words = (SEGMENT_SIZE_BITS + 63) / 64;
+
+    thread::scope(|scope| {
+        for worker_id in 0..num_workers {
+            let sender1 = sender1.clone();
+            let sender2 = sender2.clone();
+            let small_primes = Arc::clone(&small_primes);
+
+            scope.spawn(move || {
+                // Helper function for bit operations
+                #[inline]
+                fn clear_bit(bits: &mut [u64], idx: usize) {
+                    let word_idx = idx / 64;
+                    let bit_idx = idx % 64;
+                    bits[word_idx] &= !(1_u64 << bit_idx);
+                }
+
+                // Allocate segment buffer for this worker
+                let mut segment = vec![0_u64; segment_words];
+
+                // Process segments assigned to this worker
+                for segment_idx in (worker_id..total_segments).step_by(num_workers) {
+                    let seg_low = low + segment_idx * SEGMENT_SIZE_NUMBERS;
+                    let seg_high = (seg_low + SEGMENT_SIZE_NUMBERS - 1).min(limit);
+
+                    // Reinitialize segment (all bits to 1 = prime)
+                    segment.fill(!0_u64);
+
+                    // Mark composites using small primes
+                    for &p in small_primes.iter().skip(1) {
+                        // Find first odd multiple of p in [seg_low, seg_high]
+                        let mut start = ((seg_low + p - 1) / p) * p;
+                        if start % 2 == 0 {
+                            start += p; // Make it odd
+                        }
+
+                        // Mark multiples as composite
+                        while start <= seg_high {
+                            let idx = (start - seg_low) / 2;
+                            clear_bit(&mut segment, idx);
+                            start += p * 2; // Skip to next odd multiple
+                        }
+                    }
+
+                    // Unpack segment into Vec<usize>
+                    let mut segment_primes = Vec::new();
+                    for word_idx in 0..segment_words {
+                        let mut word = segment[word_idx];
+
+                        while word != 0 {
+                            let bit_idx = word.trailing_zeros() as usize;
+                            let idx = word_idx * 64 + bit_idx;
+
+                            let num = seg_low + idx * 2;
+                            if num <= seg_high {
+                                segment_primes.push(num);
+                            }
+
+                            word &= word - 1; // Clear lowest set bit
+                        }
+                    }
+
+                    // Segment numbering starts at 1 (0 is reserved for small primes)
+                    let segment_id = segment_idx + 1;
+                    let segment_data = SegmentPrimes {
+                        primes: segment_primes,
+                        segment_id,
+                    };
+
+                    // Odd segment_ids (1, 3, 5, ...) to consumer 2
+                    // Even segment_ids (2, 4, 6, ...) to consumer 1
+                    let result = if segment_id % 2 == 1 {
+                        sender2.send(segment_data)
+                    } else {
+                        sender1.send(segment_data)
+                    };
+
+                    if result.is_err() {
+                        return; // Receiver dropped, stop this worker
+                    }
+                }
+            });
+        }
+    });
+
+    small_primes_vec
+}
+
 pub fn find_primes(limit: usize, variation: u32) -> Vec<usize> {
     match variation {
         1 => find_primes_v1(limit),
