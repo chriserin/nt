@@ -35,6 +35,12 @@ enum Commands {
             help = "Number of worker threads for parallel processing (variation 8 only)"
         )]
         workers: Option<usize>,
+        #[arg(
+            short,
+            long,
+            help = "Save primes in binary format (8 bytes per prime, little-endian)"
+        )]
+        binary: bool,
     },
     #[command(about = "Find all prime numbers up to a given limit (storing all in memory)")]
     PrimesAllMem {
@@ -167,6 +173,7 @@ fn main() {
             variation,
             save_as_property,
             workers,
+            binary,
         } => {
             let start = Instant::now();
 
@@ -208,7 +215,11 @@ fn main() {
                 let (tx, rx) = mpsc::channel::<Vec<usize>>();
 
                 // Spawn consumer thread for batched segments
-                let handle = thread::spawn(move || storage::save_primes_streaming_batched(rx));
+                let handle = if binary {
+                    thread::spawn(move || storage::save_primes_streaming_batched_binary(rx))
+                } else {
+                    thread::spawn(move || storage::save_primes_streaming_batched(rx))
+                };
 
                 // Generate primes and send batched to consumer thread
                 primes::find_primes_v6_streaming(effective_limit, tx);
@@ -239,9 +250,15 @@ fn main() {
                 let (tx, rx) = mpsc::channel::<primes::SegmentPrimes>();
 
                 // Spawn consumer thread for parallel segments (with reordering)
-                let handle = thread::spawn(move || {
-                    storage::save_primes_streaming_segments_parallel(rx)
-                });
+                let handle = if binary {
+                    thread::spawn(move || {
+                        storage::save_primes_streaming_segments_parallel_binary(rx)
+                    })
+                } else {
+                    thread::spawn(move || {
+                        storage::save_primes_streaming_segments_parallel(rx)
+                    })
+                };
 
                 // Generate primes in parallel and send unpacked segments to consumer thread
                 primes::find_primes_v8_parallel(effective_limit, tx, num_workers);

@@ -388,3 +388,135 @@ pub fn save_primes_streaming_segments_parallel(rx: Receiver<SegmentPrimes>) -> u
     println!("\nSaved all primes to primes.txt (parallel)");
     count
 }
+
+/// Save primes from unpacked segment data with reordering in BINARY format (variation 8)
+/// Receives segments out-of-order from parallel workers and writes in order
+/// Binary format: 8 bytes per prime (little-endian u64)
+/// Returns the count of primes saved
+pub fn save_primes_streaming_segments_parallel_binary(rx: Receiver<SegmentPrimes>) -> usize {
+    let mut count = 0;
+
+    // Open primes.bin in write mode (truncate)
+    let data_dir = get_nt_data_dir();
+    if let Err(e) = fs::create_dir_all(&data_dir) {
+        eprintln!("Error creating data directory: {}", e);
+        return 0;
+    }
+
+    let primes_path = data_dir.join("primes.bin");
+
+    let file = match OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&primes_path)
+    {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("Error opening primes.bin: {}", e);
+            return 0;
+        }
+    };
+
+    // Use BufWriter with larger buffer for better performance
+    let mut writer = BufWriter::with_capacity(128 * 1024, file);
+
+    // Buffer for out-of-order segments
+    let mut segment_buffer: BTreeMap<usize, SegmentPrimes> = BTreeMap::new();
+    let mut next_expected_id = 0;
+
+    // Helper function to process a segment
+    let process_segment = |segment_primes: &SegmentPrimes, writer: &mut BufWriter<_>| -> usize {
+        let local_count = segment_primes.primes.len();
+
+        // Write primes as binary (8 bytes each, little-endian)
+        for &prime in &segment_primes.primes {
+            let bytes = (prime as u64).to_le_bytes();
+            if let Err(e) = writer.write_all(&bytes) {
+                eprintln!("Error writing to primes.bin: {}", e);
+            }
+        }
+
+        local_count
+    };
+
+    // Process segments in order
+    for segment_primes in rx {
+        let segment_id = segment_primes.segment_id;
+
+        // Add to buffer
+        segment_buffer.insert(segment_id, segment_primes);
+
+        // Process all consecutive segments starting from next_expected_id
+        while let Some(seg) = segment_buffer.remove(&next_expected_id) {
+            count += process_segment(&seg, &mut writer);
+            next_expected_id += 1;
+        }
+    }
+
+    // Process any remaining buffered segments (shouldn't happen if producer is correct)
+    while let Some((_, seg)) = segment_buffer.pop_first() {
+        count += process_segment(&seg, &mut writer);
+    }
+
+    // Flush buffer before returning
+    if let Err(e) = writer.flush() {
+        eprintln!("Error flushing primes.bin: {}", e);
+    }
+
+    println!("\nSaved all primes to primes.bin (parallel, binary format)");
+    count
+}
+
+/// Save primes from batched segments in BINARY format (variation 6)
+/// Binary format: 8 bytes per prime (little-endian u64)
+/// Returns the count of primes saved
+pub fn save_primes_streaming_batched_binary(rx: Receiver<Vec<usize>>) -> usize {
+    let mut count = 0;
+
+    // Open primes.bin in write mode (truncate)
+    let data_dir = get_nt_data_dir();
+    if let Err(e) = fs::create_dir_all(&data_dir) {
+        eprintln!("Error creating data directory: {}", e);
+        return 0;
+    }
+
+    let primes_path = data_dir.join("primes.bin");
+
+    let file = match OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&primes_path)
+    {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("Error opening primes.bin: {}", e);
+            return 0;
+        }
+    };
+
+    // Use BufWriter to buffer writes in memory
+    let mut writer = BufWriter::with_capacity(256 * 1024, file);
+
+    // Process each segment of primes from the channel
+    for segment_primes in rx {
+        for prime in segment_primes {
+            // Write as binary (8 bytes, little-endian)
+            let bytes = (prime as u64).to_le_bytes();
+            if let Err(e) = writer.write_all(&bytes) {
+                eprintln!("Error writing to primes.bin: {}", e);
+            }
+
+            count += 1;
+        }
+    }
+
+    // Flush buffer before returning
+    if let Err(e) = writer.flush() {
+        eprintln!("Error flushing primes.bin: {}", e);
+    }
+
+    println!("\nSaved all primes to primes.bin (binary format)");
+    count
+}
