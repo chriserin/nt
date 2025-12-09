@@ -5,12 +5,6 @@ use std::thread;
 pub const SEGMENT_SIZE_BITS: usize = 32 * 1024 * 8; // 32KB in bits = 262,144 odd numbers
 pub const SEGMENT_SIZE_NUMBERS: usize = SEGMENT_SIZE_BITS * 2; // 524,288 actual numbers
 
-/// Round a limit up to the next segment boundary for variation 5+
-pub fn round_to_segment_boundary(limit: usize) -> usize {
-    println!("SEGMENT_SIZE_NUMBERS: {}", SEGMENT_SIZE_NUMBERS);
-    ((limit + SEGMENT_SIZE_NUMBERS - 1) / SEGMENT_SIZE_NUMBERS) * SEGMENT_SIZE_NUMBERS
-}
-
 /// Raw segment data for variation 7 (consumer-side unpacking)
 #[derive(Clone)]
 pub struct SegmentData {
@@ -377,7 +371,7 @@ fn find_primes_v5_streaming(limit: usize, sender: Sender<usize>) {
 /// - Sends one Vec per segment (massive reduction in channel overhead)
 /// - Best for very large limits (billions+) with parallelization potential
 /// - Segment size: 32KB (fits in L1 cache)
-pub fn find_primes_v6_streaming(limit: usize, sender: Sender<Vec<usize>>) {
+pub fn find_primes_v6_streaming(limit: usize, sqrt_limit: usize, sender: Sender<Vec<usize>>) {
     if limit < 2 {
         return;
     }
@@ -386,8 +380,7 @@ pub fn find_primes_v6_streaming(limit: usize, sender: Sender<Vec<usize>>) {
         return;
     }
 
-    // Step 1: Find small primes up to sqrt(limit) using v2 (odd-only)
-    let sqrt_limit = (limit as f64).sqrt() as usize;
+    // Step 1: Find small primes up to sqrt_limit using v2 (odd-only)
     let small_primes = find_primes_v2(sqrt_limit);
 
     // Send all small primes as first batch
@@ -475,9 +468,8 @@ pub fn find_primes_v6_streaming(limit: usize, sender: Sender<Vec<usize>>) {
 /// - ~10% faster producer than v6 (no unpacking overhead)
 /// - Best for very large limits with parallel consumers
 /// - Segment size: 32KB (fits in L1 cache)
-pub fn find_primes_v7_streaming(limit: usize, sender: Sender<SegmentData>) {
-    // Step 1: Find small primes up to sqrt(limit) using v2 (odd-only)
-    let sqrt_limit = (limit as f64).sqrt() as usize;
+pub fn find_primes_v7_streaming(limit: usize, sqrt_limit: usize, sender: Sender<SegmentData>) {
+    // Step 1: Find small primes up to sqrt_limit using v2 (odd-only)
     let small_primes = find_primes_v2(sqrt_limit);
 
     // Send small primes as a packed segment (consumer will unpack)
@@ -608,13 +600,12 @@ fn pack_primes_to_bits(primes: &[usize]) -> Vec<u64> {
 /// - Best for very large limits on multi-core systems
 /// - Segment size: 32KB (fits in L1 cache per core)
 /// - Scales linearly with CPU cores
-pub fn find_primes_v8_parallel(limit: usize, sender: Sender<SegmentPrimes>, num_workers: usize) {
+pub fn find_primes_v8_parallel(limit: usize, sqrt_limit: usize, sender: Sender<SegmentPrimes>, num_workers: usize) {
     if limit < 2 {
         return;
     }
 
-    // Step 1: Find small primes up to sqrt(limit) using v2 (odd-only)
-    let sqrt_limit = (limit as f64).sqrt() as usize;
+    // Step 1: Find small primes up to sqrt_limit using v2 (odd-only)
     let small_primes = Arc::new(find_primes_v2(sqrt_limit));
 
     // Send small primes as first segment (already unpacked)
@@ -730,6 +721,7 @@ pub fn find_primes_v8_parallel(limit: usize, sender: Sender<SegmentPrimes>, num_
 /// - Returns small_primes for caller to save
 pub fn find_primes_v9_dual_consumers(
     limit: usize,
+    sqrt_limit: usize,
     sender1: Sender<SegmentPrimes>,
     sender2: Sender<SegmentPrimes>,
     num_workers: usize,
@@ -738,8 +730,7 @@ pub fn find_primes_v9_dual_consumers(
         return vec![];
     }
 
-    // Step 1: Find small primes up to sqrt(limit) using v2 (odd-only)
-    let sqrt_limit = (limit as f64).sqrt() as usize;
+    // Step 1: Find small primes up to sqrt_limit using v2 (odd-only)
     let small_primes_vec = find_primes_v2(sqrt_limit);
     let small_primes = Arc::new(small_primes_vec.clone());
 
@@ -785,6 +776,15 @@ pub fn find_primes_v9_dual_consumers(
                 for segment_idx in (worker_id..total_segments).step_by(num_workers) {
                     let seg_low = low + segment_idx * SEGMENT_SIZE_NUMBERS;
                     let seg_high = (seg_low + SEGMENT_SIZE_NUMBERS - 1).min(limit);
+                    if seg_high != (seg_low + SEGMENT_SIZE_NUMBERS - 1) {
+                        let panic_message = format!(
+                            "Segment size misalignment detected! seg_low: {}, seg_high: {}, expected high: {}",
+                            seg_low,
+                            seg_high,
+                            seg_low + SEGMENT_SIZE_NUMBERS - 1
+                        );
+                        panic!("{}", panic_message);
+                    }
 
                     // Reinitialize segment (all bits to 1 = prime)
                     segment.fill(!0_u64);
@@ -815,9 +815,7 @@ pub fn find_primes_v9_dual_consumers(
                             let idx = word_idx * 64 + bit_idx;
 
                             let num = seg_low + idx * 2;
-                            if num <= seg_high {
-                                segment_primes.push(num);
-                            }
+                            segment_primes.push(num);
 
                             word &= word - 1; // Clear lowest set bit
                         }

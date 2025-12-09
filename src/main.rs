@@ -101,7 +101,7 @@ fn main() {
         } => {
             let start = Instant::now();
 
-            // For variation 5 (segmented sieve), round limit up to segment boundary
+            // For variation 5 (segmented sieve), adjust limit to account for small primes range
             let (effective_limit, original_limit) = if variation == 5 {
                 if limit < primes::SEGMENT_SIZE_NUMBERS {
                     eprintln!(
@@ -112,16 +112,21 @@ fn main() {
                     return;
                 }
 
-                let rounded_limit = primes::round_to_segment_boundary(limit);
+                // Calculate sqrt_limit once and use it consistently
+                let sqrt_limit = (limit as f64).sqrt() as usize;
+                let low = (sqrt_limit + 1) | 1; // First odd after sqrt (where segments start)
+                let range_to_cover = if limit >= low { limit - low + 1 } else { 0 };
+                let num_segments = (range_to_cover + primes::SEGMENT_SIZE_NUMBERS - 1) / primes::SEGMENT_SIZE_NUMBERS;
+                let effective_limit = low + (num_segments * primes::SEGMENT_SIZE_NUMBERS) - 1;
 
-                if rounded_limit != limit {
+                if effective_limit != limit {
                     println!(
-                        "Rounding limit from {} to {} (next segment boundary)",
-                        limit, rounded_limit
+                        "Adjusting limit from {} to {} (sqrt={}, low={}, segments={})",
+                        limit, effective_limit, sqrt_limit, low, num_segments
                     );
                 }
 
-                (rounded_limit, limit)
+                (effective_limit, limit)
             } else {
                 (limit, limit)
             };
@@ -177,8 +182,8 @@ fn main() {
         } => {
             let start = Instant::now();
 
-            // For variation 5, 6, 7, 8, or 9, round limit up to segment boundary
-            let (effective_limit, original_limit) =
+            // For variation 5, 6, 7, 8, or 9, adjust limit to account for small primes range
+            let (effective_limit, original_limit, sqrt_limit) =
                 if variation == 5 || variation == 6 || variation == 7 || variation == 8 || variation == 9 {
                     if limit < primes::SEGMENT_SIZE_NUMBERS {
                         eprintln!(
@@ -190,18 +195,23 @@ fn main() {
                         return;
                     }
 
-                    let rounded_limit = primes::round_to_segment_boundary(limit);
+                    // Calculate sqrt_limit once and use it consistently
+                    let sqrt_limit = (limit as f64).sqrt() as usize;
+                    let low = (sqrt_limit + 1) | 1; // First odd after sqrt (where segments start)
+                    let range_to_cover = if limit >= low { limit - low + 1 } else { 0 };
+                    let num_segments = (range_to_cover + primes::SEGMENT_SIZE_NUMBERS - 1) / primes::SEGMENT_SIZE_NUMBERS;
+                    let effective_limit = low + (num_segments * primes::SEGMENT_SIZE_NUMBERS) - 1;
 
-                    if rounded_limit != limit {
+                    if effective_limit != limit {
                         println!(
-                            "Rounding limit from {} to {} (next segment boundary)",
-                            limit, rounded_limit
+                            "Adjusting limit from {} to {} (sqrt={}, low={}, segments={})",
+                            limit, effective_limit, sqrt_limit, low, num_segments
                         );
                     }
 
-                    (rounded_limit, limit)
+                    (effective_limit, limit, sqrt_limit)
                 } else {
-                    (limit, limit)
+                    (limit, limit, 0) // sqrt_limit not needed for other variations
                 };
 
             println!(
@@ -222,7 +232,7 @@ fn main() {
                 };
 
                 // Generate primes and send batched to consumer thread
-                primes::find_primes_v6_streaming(effective_limit, tx);
+                primes::find_primes_v6_streaming(effective_limit, sqrt_limit, tx);
 
                 handle
             } else if variation == 7 {
@@ -234,7 +244,7 @@ fn main() {
                 });
 
                 // Generate primes and send raw segments to consumer thread
-                primes::find_primes_v7_streaming(effective_limit, tx);
+                primes::find_primes_v7_streaming(effective_limit, sqrt_limit, tx);
 
                 handle
             } else if variation == 8 {
@@ -261,7 +271,7 @@ fn main() {
                 };
 
                 // Generate primes in parallel and send unpacked segments to consumer thread
-                primes::find_primes_v8_parallel(effective_limit, tx, num_workers);
+                primes::find_primes_v8_parallel(effective_limit, sqrt_limit, tx, num_workers);
 
                 handle
             } else if variation == 9 {
@@ -297,6 +307,7 @@ fn main() {
                 // Generate primes and get small_primes back
                 let small_primes = primes::find_primes_v9_dual_consumers(
                     effective_limit,
+                    sqrt_limit,
                     tx1,
                     tx2,
                     num_workers,
