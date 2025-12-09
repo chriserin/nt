@@ -304,7 +304,7 @@ fn main() {
                     storage::save_primes_dual_consumer2_binary(rx2)
                 });
 
-                // Generate primes and get small_primes back
+                // Generate primes and get small_primes back (blocks until producer done)
                 let small_primes = primes::find_primes_v9_dual_consumers(
                     effective_limit,
                     sqrt_limit,
@@ -313,18 +313,21 @@ fn main() {
                     num_workers,
                 );
 
-                // Save small primes to primes_small.bin
-                let small_count = storage::save_small_primes_binary(&small_primes);
+                // Return handle that waits for both consumers and computes total
+                // Save small primes in this thread to avoid affecting producer timing
+                thread::spawn(move || {
+                    // Save small primes while consumers are working
+                    let small_count = storage::save_small_primes_binary(&small_primes);
 
-                // Wait for both consumers
-                let count1 = consumer1.join().unwrap();
-                let count2 = consumer2.join().unwrap();
+                    // Wait for both consumers to finish
+                    let count1 = consumer1.join().unwrap();
+                    let count2 = consumer2.join().unwrap();
 
-                println!("\nTotal primes: {} (small: {}, consumer1: {}, consumer2: {})",
-                    small_count + count1 + count2, small_count, count1, count2);
-
-                // Create dummy handle for consistency
-                thread::spawn(move || small_count + count1 + count2)
+                    let total = small_count + count1 + count2;
+                    println!("Total primes: {} (small: {}, consumer1: {}, consumer2: {})",
+                        total, small_count, count1, count2);
+                    total
+                })
             } else {
                 let (tx, rx) = mpsc::channel();
 
