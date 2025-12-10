@@ -1,4 +1,4 @@
-use std::sync::{Arc, mpsc::Sender};
+use std::sync::{Arc, mpsc::{Sender, SyncSender}};
 use std::thread;
 
 // Segment size constants for variation 5+ (segmented sieve)
@@ -724,7 +724,7 @@ pub fn find_primes_v8_parallel(
 pub fn find_primes_v9_multi_consumers(
     limit: usize,
     sqrt_limit: usize,
-    senders: Vec<Sender<SegmentPrimes>>,
+    senders: Vec<SyncSender<SegmentPrimes>>,
     num_workers: usize,
 ) -> Vec<usize> {
     if limit < 2 {
@@ -737,8 +737,7 @@ pub fn find_primes_v9_multi_consumers(
     }
 
     // Step 1: Find small primes up to sqrt_limit using v2 (odd-only)
-    let small_primes_vec = find_primes_v2(sqrt_limit);
-    let small_primes = Arc::new(small_primes_vec.clone());
+    let small_primes = Arc::new(find_primes_v2(sqrt_limit));
 
     // Step 2: Calculate segment ranges
     let mut low = (sqrt_limit + 1) | 1; // Make odd
@@ -750,7 +749,7 @@ pub fn find_primes_v9_multi_consumers(
     let total_range = if limit >= low {
         limit - low + 1
     } else {
-        return small_primes_vec; // No segments needed, just small primes
+        return vec![];
     };
     let total_segments = (total_range + SEGMENT_SIZE_NUMBERS - 1) / SEGMENT_SIZE_NUMBERS;
 
@@ -833,7 +832,8 @@ pub fn find_primes_v9_multi_consumers(
         }
     });
 
-    small_primes_vec
+    // Clone from Arc to return (Arc will be dropped when thread::scope ends)
+    (*small_primes).clone()
 }
 
 pub fn find_primes(limit: usize, variation: u32) -> Vec<usize> {

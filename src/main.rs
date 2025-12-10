@@ -122,7 +122,8 @@ fn main() {
                 let sqrt_limit = (limit as f64).sqrt() as usize;
                 let low = (sqrt_limit + 1) | 1; // First odd after sqrt (where segments start)
                 let range_to_cover = if limit >= low { limit - low + 1 } else { 0 };
-                let num_segments = (range_to_cover + primes::SEGMENT_SIZE_NUMBERS - 1) / primes::SEGMENT_SIZE_NUMBERS;
+                let num_segments = (range_to_cover + primes::SEGMENT_SIZE_NUMBERS - 1)
+                    / primes::SEGMENT_SIZE_NUMBERS;
                 let effective_limit = low + (num_segments * primes::SEGMENT_SIZE_NUMBERS) - 1;
 
                 if effective_limit != limit {
@@ -190,36 +191,41 @@ fn main() {
             let start = Instant::now();
 
             // For variation 5, 6, 7, 8, or 9, adjust limit to account for small primes range
-            let (effective_limit, original_limit, sqrt_limit) =
-                if variation == 5 || variation == 6 || variation == 7 || variation == 8 || variation == 9 {
-                    if limit < primes::SEGMENT_SIZE_NUMBERS {
-                        eprintln!(
-                            "Variation {} (segmented sieve) requires limit >= {}",
-                            variation,
-                            primes::SEGMENT_SIZE_NUMBERS
-                        );
-                        eprintln!("For smaller limits, use variation 2 or 4 instead.");
-                        return;
-                    }
+            let (effective_limit, original_limit, sqrt_limit) = if variation == 5
+                || variation == 6
+                || variation == 7
+                || variation == 8
+                || variation == 9
+            {
+                if limit < primes::SEGMENT_SIZE_NUMBERS {
+                    eprintln!(
+                        "Variation {} (segmented sieve) requires limit >= {}",
+                        variation,
+                        primes::SEGMENT_SIZE_NUMBERS
+                    );
+                    eprintln!("For smaller limits, use variation 2 or 4 instead.");
+                    return;
+                }
 
-                    // Calculate sqrt_limit once and use it consistently
-                    let sqrt_limit = (limit as f64).sqrt() as usize;
-                    let low = (sqrt_limit + 1) | 1; // First odd after sqrt (where segments start)
-                    let range_to_cover = if limit >= low { limit - low + 1 } else { 0 };
-                    let num_segments = (range_to_cover + primes::SEGMENT_SIZE_NUMBERS - 1) / primes::SEGMENT_SIZE_NUMBERS;
-                    let effective_limit = low + (num_segments * primes::SEGMENT_SIZE_NUMBERS) - 1;
+                // Calculate sqrt_limit once and use it consistently
+                let sqrt_limit = (limit as f64).sqrt() as usize;
+                let low = (sqrt_limit + 1) | 1; // First odd after sqrt (where segments start)
+                let range_to_cover = if limit >= low { limit - low + 1 } else { 0 };
+                let num_segments = (range_to_cover + primes::SEGMENT_SIZE_NUMBERS - 1)
+                    / primes::SEGMENT_SIZE_NUMBERS;
+                let effective_limit = low + (num_segments * primes::SEGMENT_SIZE_NUMBERS) - 1;
 
-                    if effective_limit != limit {
-                        println!(
-                            "Adjusting limit from {} to {} (sqrt={}, low={}, segments={})",
-                            limit, effective_limit, sqrt_limit, low, num_segments
-                        );
-                    }
+                if effective_limit != limit {
+                    println!(
+                        "Adjusting limit from {} to {} (sqrt={}, low={}, segments={})",
+                        limit, effective_limit, sqrt_limit, low, num_segments
+                    );
+                }
 
-                    (effective_limit, limit, sqrt_limit)
-                } else {
-                    (limit, limit, 0) // sqrt_limit not needed for other variations
-                };
+                (effective_limit, limit, sqrt_limit)
+            } else {
+                (limit, limit, 0) // sqrt_limit not needed for other variations
+            };
 
             println!(
                 "Finding primes up to {} (variation {})...",
@@ -262,7 +268,10 @@ fn main() {
                         .unwrap_or(4)
                 });
 
-                println!("Using {} worker threads for parallel processing", num_workers);
+                println!(
+                    "Using {} worker threads for parallel processing",
+                    num_workers
+                );
 
                 let (tx, rx) = mpsc::channel::<primes::SegmentPrimes>();
 
@@ -272,9 +281,7 @@ fn main() {
                         storage::save_primes_streaming_segments_parallel_binary(rx)
                     })
                 } else {
-                    thread::spawn(move || {
-                        storage::save_primes_streaming_segments_parallel(rx)
-                    })
+                    thread::spawn(move || storage::save_primes_streaming_segments_parallel(rx))
                 };
 
                 // Generate primes in parallel and send unpacked segments to consumer thread
@@ -301,7 +308,10 @@ fn main() {
                         .unwrap_or(4)
                 });
 
-                println!("Using {} worker threads with {} consumers for parallel I/O", num_workers, consumers);
+                println!(
+                    "Using {} worker threads with {} consumers for parallel I/O",
+                    num_workers, consumers
+                );
 
                 // Remove all existing primes_*.bin files to avoid leftover files from previous runs
                 storage::cleanup_prime_files();
@@ -310,8 +320,12 @@ fn main() {
                 let mut senders = Vec::new();
                 let mut consumer_handles = Vec::new();
 
+                // Use bounded channels to provide backpressure if consumers fall behind
+                // Capacity of 100 segments per consumer limits memory usage
+                const CHANNEL_CAPACITY: usize = 1;
+
                 for consumer_id in 1..=consumers {
-                    let (tx, rx) = mpsc::channel::<primes::SegmentPrimes>();
+                    let (tx, rx) = mpsc::sync_channel::<primes::SegmentPrimes>(CHANNEL_CAPACITY);
                     senders.push(tx);
 
                     // Spawn consumer thread

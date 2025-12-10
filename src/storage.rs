@@ -624,6 +624,8 @@ pub fn save_primes_multi_consumer_binary(
     // So first segment is consumer_id, next is consumer_id + num_consumers, etc.
     let mut next_expected_id = consumer_id;
 
+    let warning_threshold = 100;
+
     // Helper to process segment
     let process_segment =
         |segment_primes: &SegmentPrimes, writer: &mut BufWriter<_>, filename: &str| -> usize {
@@ -646,6 +648,17 @@ pub fn save_primes_multi_consumer_binary(
         while let Some(seg) = segment_buffer.remove(&next_expected_id) {
             count += process_segment(&seg, &mut writer, &filename);
             next_expected_id += num_consumers; // Skip to next segment for this consumer
+        }
+
+        // Warn if buffer grows too large (indicates out-of-order arrival)
+        if segment_buffer.len() > warning_threshold {
+            eprintln!(
+                "Warning: Consumer {}/{} buffer has {} segments (expected next: {})",
+                consumer_id,
+                num_consumers,
+                segment_buffer.len(),
+                next_expected_id
+            );
         }
     }
 
