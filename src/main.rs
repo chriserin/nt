@@ -7,6 +7,8 @@ mod scan;
 mod storage;
 
 use clap::{Parser, Subcommand};
+use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Instant;
@@ -320,13 +322,27 @@ fn main() {
                 let mut senders = Vec::new();
                 let mut consumer_handles = Vec::new();
 
+                // Create atomic counters to track channel depth
+                let total_sent = Arc::new(AtomicUsize::new(0));
+                let total_received = Arc::new(AtomicUsize::new(0));
+
+                // Channel capacity: limits buffering to prevent OOM
+                // With 15 consumers × 100 capacity = 1,500 segments max = ~240 MB
+                const CHANNEL_CAPACITY: usize = 100;
+
                 for consumer_id in 1..=consumers {
-                    let (tx, rx) = mpsc::channel::<primes::SegmentPrimes>();
+                    let (tx, rx) = mpsc::sync_channel::<primes::SegmentPrimes>(CHANNEL_CAPACITY);
                     senders.push(tx);
 
                     // Spawn consumer thread
+                    let total_received_clone = Arc::clone(&total_received);
                     let handle = thread::spawn(move || {
-                        storage::save_primes_multi_consumer_binary(rx, consumer_id, consumers)
+                        storage::save_primes_multi_consumer_binary(
+                            rx,
+                            consumer_id,
+                            consumers,
+                            total_received_clone,
+                        )
                     });
                     consumer_handles.push(handle);
                 }
@@ -337,6 +353,7 @@ fn main() {
                     sqrt_limit,
                     senders,
                     num_workers,
+                    total_sent,
                 );
 
                 // Return handle that waits for all consumers and computes total

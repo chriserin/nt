@@ -1,5 +1,6 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, mpsc::Sender};
+use std::sync::mpsc::{Sender, SyncSender};
+use std::sync::Arc;
 use std::thread;
 
 // Segment size constants for variation 5+ (segmented sieve)
@@ -725,8 +726,9 @@ pub fn find_primes_v8_parallel(
 pub fn find_primes_v9_multi_consumers(
     limit: usize,
     sqrt_limit: usize,
-    senders: Vec<Sender<SegmentPrimes>>,
+    senders: Vec<SyncSender<SegmentPrimes>>,
     num_workers: usize,
+    total_sent: Arc<AtomicUsize>,
 ) -> Vec<usize> {
     if limit < 2 {
         return vec![];
@@ -758,11 +760,21 @@ pub fn find_primes_v9_multi_consumers(
     let segment_words = (SEGMENT_SIZE_BITS + 63) / 64;
     let next_segment = Arc::new(AtomicUsize::new(0));
 
+    // Memory monitoring: Log worker segment buffer allocations
+    let segment_buffer_bytes = segment_words * std::mem::size_of::<u64>();
+    let segment_buffer_kb = segment_buffer_bytes as f64 / 1024.0;
+    let total_worker_buffers_mb = (segment_buffer_bytes * num_workers) as f64 / (1024.0 * 1024.0);
+    eprintln!(
+        "Worker buffers: {:.2} KB per worker × {} workers = {:.2} MB total",
+        segment_buffer_kb, num_workers, total_worker_buffers_mb
+    );
+
     thread::scope(|scope| {
         for _worker_id in 0..num_workers {
             let senders = senders.clone();
             let small_primes = Arc::clone(&small_primes);
             let next_segment = Arc::clone(&next_segment);
+            let total_sent = Arc::clone(&total_sent);
 
             scope.spawn(move || {
                 // Helper function for bit operations
@@ -833,6 +845,20 @@ pub fn find_primes_v9_multi_consumers(
                     let consumer_idx = ((segment_id - 1) % num_consumers) as usize;
                     if senders[consumer_idx].send(segment_data).is_err() {
                         break; // Receiver dropped, stop this worker
+                    }
+
+                    // Increment send counter
+                    total_sent.fetch_add(1, Ordering::Relaxed);
+
+                    // Periodic memory reporting (every 1000 segments)
+                    if segment_idx % 1000 == 0 {
+                        if let Some((rss_mb, vm_mb)) = crate::storage::get_process_memory_mb() {
+                            let sent = total_sent.load(Ordering::Relaxed);
+                            eprintln!(
+                                "[Producer] Segment {} | Sent: {} | Process memory: RSS={:.2} MB, VM={:.2} MB",
+                                segment_idx, sent, rss_mb, vm_mb
+                            );
+                        }
                     }
                 }
             });

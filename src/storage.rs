@@ -2,11 +2,42 @@ use chrono::Local;
 use std::collections::BTreeMap;
 use std::env;
 use std::fs::{self, OpenOptions};
-use std::io::{BufWriter, Write};
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::Receiver;
+use std::sync::Arc;
 
 use crate::primes::{SegmentData, SegmentPrimes};
+
+/// Read current process memory usage from /proc/self/status
+/// Returns (VmRSS in MB, VmSize in MB) or None if unable to read
+pub fn get_process_memory_mb() -> Option<(f64, f64)> {
+    let file = std::fs::File::open("/proc/self/status").ok()?;
+    let reader = BufReader::new(file);
+
+    let mut vm_rss_kb = None;
+    let mut vm_size_kb = None;
+
+    for line in reader.lines().flatten() {
+        if line.starts_with("VmRSS:") {
+            // Format: "VmRSS:     12345 kB"
+            if let Some(value_str) = line.split_whitespace().nth(1) {
+                vm_rss_kb = value_str.parse::<f64>().ok();
+            }
+        } else if line.starts_with("VmSize:") {
+            if let Some(value_str) = line.split_whitespace().nth(1) {
+                vm_size_kb = value_str.parse::<f64>().ok();
+            }
+        }
+
+        if vm_rss_kb.is_some() && vm_size_kb.is_some() {
+            break;
+        }
+    }
+
+    Some((vm_rss_kb? / 1024.0, vm_size_kb? / 1024.0))
+}
 
 /// Remove all primes_*.bin files from the data directory
 /// Used to clean up before variation 9 runs to avoid leftover files from previous runs
@@ -591,6 +622,7 @@ pub fn save_primes_multi_consumer_binary(
     rx: Receiver<SegmentPrimes>,
     consumer_id: usize,
     num_consumers: usize,
+    total_received: Arc<AtomicUsize>,
 ) -> usize {
     let mut count = 0;
 
@@ -626,6 +658,12 @@ pub fn save_primes_multi_consumer_binary(
 
     let warning_threshold = 100;
 
+    // Memory monitoring
+    let mut peak_buffer_size = 0;
+    let mut peak_buffer_memory_mb = 0.0;
+    let mut total_segments_received = 0;
+    let memory_report_interval = 1000; // Report every 1000 segments processed
+
     // Helper to process segment
     let process_segment =
         |segment_primes: &SegmentPrimes, writer: &mut BufWriter<_>, filename: &str| -> usize {
@@ -642,22 +680,73 @@ pub fn save_primes_multi_consumer_binary(
     // Process segments in order
     for segment_primes in rx {
         let segment_id = segment_primes.segment_id;
+        total_segments_received += 1;
+
+        // Increment receive counter
+        total_received.fetch_add(1, Ordering::Relaxed);
+
         segment_buffer.insert(segment_id, segment_primes);
 
         // Process all consecutive segments for this consumer
         while let Some(seg) = segment_buffer.remove(&next_expected_id) {
             count += process_segment(&seg, &mut writer, &filename);
             next_expected_id += num_consumers; // Skip to next segment for this consumer
+
+            // Periodic memory reporting
+            if (next_expected_id / num_consumers) % memory_report_interval == 0 {
+                if let Some((rss_mb, vm_mb)) = get_process_memory_mb() {
+                    let received = total_received.load(Ordering::Relaxed);
+                    eprintln!(
+                        "[Consumer {}/{}] Processed {} segments | Received: {} | Process memory: RSS={:.2} MB, VM={:.2} MB",
+                        consumer_id, num_consumers, next_expected_id / num_consumers, received, rss_mb, vm_mb
+                    );
+                }
+            }
+        }
+
+        // Memory monitoring: calculate current buffer memory usage
+        let buffer_size = segment_buffer.len();
+        if buffer_size > peak_buffer_size {
+            peak_buffer_size = buffer_size;
+        }
+
+        // Estimate memory usage:
+        // - BTreeMap node overhead: ~32 bytes per entry
+        // - SegmentPrimes: 8 bytes (segment_id) + Vec overhead (24 bytes) + data
+        let mut buffer_memory_bytes = 0;
+        for seg in segment_buffer.values() {
+            let seg_size = std::mem::size_of::<usize>() // segment_id
+                + std::mem::size_of::<Vec<usize>>() // Vec overhead
+                + (seg.primes.len() * std::mem::size_of::<usize>()) // actual primes
+                + 32; // BTreeMap node overhead estimate
+            buffer_memory_bytes += seg_size;
+        }
+        let buffer_memory_mb = buffer_memory_bytes as f64 / (1024.0 * 1024.0);
+
+        if buffer_memory_mb > peak_buffer_memory_mb {
+            peak_buffer_memory_mb = buffer_memory_mb;
         }
 
         // Warn if buffer grows too large (indicates out-of-order arrival)
         if segment_buffer.len() > warning_threshold {
             eprintln!(
-                "Warning: Consumer {}/{} buffer has {} segments (expected next: {})",
+                "Warning: Consumer {}/{} buffer: {} segments, {:.2} MB (expected next: {}, received: {})",
                 consumer_id,
                 num_consumers,
                 segment_buffer.len(),
-                next_expected_id
+                buffer_memory_mb,
+                next_expected_id,
+                total_segments_received
+            );
+        }
+
+        // Warn if channel accumulation is high (every 10,000 segments received)
+        if total_segments_received % 10000 == 0 {
+            let received_total = total_received.load(Ordering::Relaxed);
+            // Channel depth is a rough estimate (sent might be slightly ahead due to concurrency)
+            eprintln!(
+                "[Consumer {}/{}] Channel check at {} local received | Global received: {}",
+                consumer_id, num_consumers, total_segments_received, received_total
             );
         }
     }
@@ -672,8 +761,8 @@ pub fn save_primes_multi_consumer_binary(
     }
 
     println!(
-        "Consumer {}: Saved {} primes to {}",
-        consumer_id, count, filename
+        "Consumer {}: Saved {} primes to {} | Peak buffer: {} segments, {:.2} MB",
+        consumer_id, count, filename, peak_buffer_size, peak_buffer_memory_mb
     );
     count
 }
