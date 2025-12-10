@@ -322,7 +322,7 @@ fn main() {
 
                 // Use bounded channels to provide backpressure if consumers fall behind
                 // Capacity of 100 segments per consumer limits memory usage
-                const CHANNEL_CAPACITY: usize = 1;
+                const CHANNEL_CAPACITY: usize = 100;
 
                 for consumer_id in 1..=consumers {
                     let (tx, rx) = mpsc::sync_channel::<primes::SegmentPrimes>(CHANNEL_CAPACITY);

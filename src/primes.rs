@@ -1,4 +1,5 @@
 use std::sync::{Arc, mpsc::{Sender, SyncSender}};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 
 // Segment size constants for variation 5+ (segmented sieve)
@@ -753,13 +754,15 @@ pub fn find_primes_v9_multi_consumers(
     };
     let total_segments = (total_range + SEGMENT_SIZE_NUMBERS - 1) / SEGMENT_SIZE_NUMBERS;
 
-    // Step 3: Spawn worker threads
+    // Step 3: Spawn worker threads with atomic work queue
     let segment_words = (SEGMENT_SIZE_BITS + 63) / 64;
+    let next_segment = Arc::new(AtomicUsize::new(0));
 
     thread::scope(|scope| {
-        for worker_id in 0..num_workers {
+        for _worker_id in 0..num_workers {
             let senders = senders.clone();
             let small_primes = Arc::clone(&small_primes);
+            let next_segment = Arc::clone(&next_segment);
 
             scope.spawn(move || {
                 // Helper function for bit operations
@@ -773,8 +776,12 @@ pub fn find_primes_v9_multi_consumers(
                 // Allocate segment buffer for this worker
                 let mut segment = vec![0_u64; segment_words];
 
-                // Process segments assigned to this worker
-                for segment_idx in (worker_id..total_segments).step_by(num_workers) {
+                // Workers pull segments sequentially from atomic counter
+                loop {
+                    let segment_idx = next_segment.fetch_add(1, Ordering::Relaxed);
+                    if segment_idx >= total_segments {
+                        break;
+                    }
                     let seg_low = low + segment_idx * SEGMENT_SIZE_NUMBERS;
                     let seg_high = (seg_low + SEGMENT_SIZE_NUMBERS - 1).min(limit);
 
@@ -825,7 +832,7 @@ pub fn find_primes_v9_multi_consumers(
                     // Route to consumer based on segment_id: segment S → consumer ((S-1) % N)
                     let consumer_idx = ((segment_id - 1) % num_consumers) as usize;
                     if senders[consumer_idx].send(segment_data).is_err() {
-                        return; // Receiver dropped, stop this worker
+                        break; // Receiver dropped, stop this worker
                     }
                 }
             });
