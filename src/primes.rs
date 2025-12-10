@@ -1,5 +1,5 @@
-use std::sync::{Arc, mpsc::{Sender, SyncSender}};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, mpsc::Sender};
 use std::thread;
 
 // Segment size constants for variation 5+ (segmented sieve)
@@ -725,7 +725,7 @@ pub fn find_primes_v8_parallel(
 pub fn find_primes_v9_multi_consumers(
     limit: usize,
     sqrt_limit: usize,
-    senders: Vec<SyncSender<SegmentPrimes>>,
+    senders: Vec<Sender<SegmentPrimes>>,
     num_workers: usize,
 ) -> Vec<usize> {
     if limit < 2 {
