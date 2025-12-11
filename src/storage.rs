@@ -649,7 +649,7 @@ pub fn save_primes_multi_consumer_binary(
         }
     };
 
-    let mut writer = BufWriter::with_capacity(128 * 1024, file);
+    let mut writer = BufWriter::with_capacity(8 * 1024 * 1024, file);
 
     // Buffer for out-of-order segments
     let mut segment_buffer: BTreeMap<usize, SegmentPrimes> = BTreeMap::new();
