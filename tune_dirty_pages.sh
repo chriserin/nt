@@ -23,8 +23,8 @@ DEFAULT_DIRTY_EXPIRE_CENTISECS=3000
 # 32 GB max dirty, 16 GB background flush
 HP_DIRTY_BYTES=$((32 * 1024 * 1024 * 1024))
 HP_DIRTY_BACKGROUND_BYTES=$((16 * 1024 * 1024 * 1024))
-HP_DIRTY_WRITEBACK_CENTISECS=100  # Flush every 1 second
-HP_DIRTY_EXPIRE_CENTISECS=1000    # Flush pages older than 10 seconds
+HP_DIRTY_WRITEBACK_CENTISECS=100 # Flush every 1 second
+HP_DIRTY_EXPIRE_CENTISECS=1000   # Flush pages older than 10 seconds
 
 show_current() {
     echo "Current settings:"
@@ -32,24 +32,24 @@ show_current() {
     echo "  dirty_background_ratio: $(cat /proc/sys/vm/dirty_background_ratio)%"
     echo "  dirty_bytes:            $(cat /proc/sys/vm/dirty_bytes) bytes"
     echo "  dirty_background_bytes: $(cat /proc/sys/vm/dirty_background_bytes) bytes"
-    echo "  dirty_writeback_centisecs: $(cat /proc/sys/vm/dirty_writeback_centisecs) ($(( $(cat /proc/sys/vm/dirty_writeback_centisecs) / 100 ))s)"
-    echo "  dirty_expire_centisecs:    $(cat /proc/sys/vm/dirty_expire_centisecs) ($(( $(cat /proc/sys/vm/dirty_expire_centisecs) / 100 ))s)"
+    echo "  dirty_writeback_centisecs: $(cat /proc/sys/vm/dirty_writeback_centisecs) ($(($(cat /proc/sys/vm/dirty_writeback_centisecs) / 100))s)"
+    echo "  dirty_expire_centisecs:    $(cat /proc/sys/vm/dirty_expire_centisecs) ($(($(cat /proc/sys/vm/dirty_expire_centisecs) / 100))s)"
 }
 
 set_high_performance() {
     echo "Setting high-performance dirty page parameters..."
 
     # Clear ratio-based settings (setting bytes overrides ratio, but clear anyway)
-    sysctl -w vm.dirty_ratio=0 > /dev/null
-    sysctl -w vm.dirty_background_ratio=0 > /dev/null
+    sysctl -w vm.dirty_ratio=0 >/dev/null
+    sysctl -w vm.dirty_background_ratio=0 >/dev/null
 
     # Set absolute byte limits
-    sysctl -w vm.dirty_bytes=${HP_DIRTY_BYTES} > /dev/null
-    sysctl -w vm.dirty_background_bytes=${HP_DIRTY_BACKGROUND_BYTES} > /dev/null
+    sysctl -w vm.dirty_bytes=${HP_DIRTY_BYTES} >/dev/null
+    sysctl -w vm.dirty_background_bytes=${HP_DIRTY_BACKGROUND_BYTES} >/dev/null
 
     # Set writeback timing
-    sysctl -w vm.dirty_writeback_centisecs=${HP_DIRTY_WRITEBACK_CENTISECS} > /dev/null
-    sysctl -w vm.dirty_expire_centisecs=${HP_DIRTY_EXPIRE_CENTISECS} > /dev/null
+    sysctl -w vm.dirty_writeback_centisecs=${HP_DIRTY_WRITEBACK_CENTISECS} >/dev/null
+    sysctl -w vm.dirty_expire_centisecs=${HP_DIRTY_EXPIRE_CENTISECS} >/dev/null
 
     echo "✓ High-performance settings applied:"
     echo "  Max dirty:        $((HP_DIRTY_BYTES / 1024 / 1024 / 1024)) GB"
@@ -61,17 +61,18 @@ set_high_performance() {
 reset_defaults() {
     echo "Restoring default dirty page parameters..."
 
-    # Clear byte-based settings
-    sysctl -w vm.dirty_bytes=0 > /dev/null
-    sysctl -w vm.dirty_background_bytes=0 > /dev/null
-
     # Restore ratio-based settings
-    sysctl -w vm.dirty_ratio=${DEFAULT_DIRTY_RATIO} > /dev/null
-    sysctl -w vm.dirty_background_ratio=${DEFAULT_DIRTY_BACKGROUND_RATIO} > /dev/null
+    sysctl -w vm.dirty_ratio=${DEFAULT_DIRTY_RATIO} >/dev/null
+    sysctl -w vm.dirty_background_ratio=${DEFAULT_DIRTY_BACKGROUND_RATIO} >/dev/null
+
+    # Setting the ratios will override byte-based settings, so no need to explicitly clear them
+    # Clear byte-based settings
+    # sysctl -w vm.dirty_bytes=0 >/dev/null
+    # sysctl -w vm.dirty_background_bytes=0 >/dev/null
 
     # Restore writeback timing
-    sysctl -w vm.dirty_writeback_centisecs=${DEFAULT_DIRTY_WRITEBACK_CENTISECS} > /dev/null
-    sysctl -w vm.dirty_expire_centisecs=${DEFAULT_DIRTY_EXPIRE_CENTISECS} > /dev/null
+    sysctl -w vm.dirty_writeback_centisecs=${DEFAULT_DIRTY_WRITEBACK_CENTISECS} >/dev/null
+    sysctl -w vm.dirty_expire_centisecs=${DEFAULT_DIRTY_EXPIRE_CENTISECS} >/dev/null
 
     echo "✓ Default settings restored:"
     echo "  dirty_ratio:            ${DEFAULT_DIRTY_RATIO}%"
@@ -82,28 +83,28 @@ reset_defaults() {
 
 # Main
 case "${1:-}" in
-    set)
-        set_high_performance
-        echo ""
-        show_current
-        ;;
-    reset)
-        reset_defaults
-        echo ""
-        show_current
-        ;;
-    show)
-        show_current
-        ;;
-    *)
-        echo "Usage: $0 {set|reset|show}"
-        echo ""
-        echo "Commands:"
-        echo "  set   - Configure for high-performance writes (32 GB dirty buffer)"
-        echo "  reset - Restore default settings"
-        echo "  show  - Display current settings"
-        echo ""
-        echo "Note: This script requires root privileges (use sudo)"
-        exit 1
-        ;;
+set)
+    set_high_performance
+    echo ""
+    show_current
+    ;;
+reset)
+    reset_defaults
+    echo ""
+    show_current
+    ;;
+show)
+    show_current
+    ;;
+*)
+    echo "Usage: $0 {set|reset|show}"
+    echo ""
+    echo "Commands:"
+    echo "  set   - Configure for high-performance writes (32 GB dirty buffer)"
+    echo "  reset - Restore default settings"
+    echo "  show  - Display current settings"
+    echo ""
+    echo "Note: This script requires root privileges (use sudo)"
+    exit 1
+    ;;
 esac
