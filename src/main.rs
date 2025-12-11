@@ -336,12 +336,14 @@ fn main() {
 
                     // Spawn consumer thread
                     let total_received_clone = Arc::clone(&total_received);
+                    let total_sent_clone = Arc::clone(&total_sent);
                     let handle = thread::spawn(move || {
                         storage::save_primes_multi_consumer_binary(
                             rx,
                             consumer_id,
                             consumers,
                             total_received_clone,
+                            total_sent_clone,
                         )
                     });
                     consumer_handles.push(handle);

@@ -4,9 +4,9 @@ use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::Receiver;
-use std::sync::Arc;
 
 use crate::primes::{SegmentData, SegmentPrimes};
 
@@ -623,6 +623,7 @@ pub fn save_primes_multi_consumer_binary(
     consumer_id: usize,
     num_consumers: usize,
     total_received: Arc<AtomicUsize>,
+    total_sent: Arc<AtomicUsize>,
 ) -> usize {
     let mut count = 0;
 
@@ -695,10 +696,19 @@ pub fn save_primes_multi_consumer_binary(
             // Periodic memory reporting
             if (next_expected_id / num_consumers) % memory_report_interval == 0 {
                 if let Some((rss_mb, vm_mb)) = get_process_memory_mb() {
+                    let sent = total_sent.load(Ordering::Relaxed);
                     let received = total_received.load(Ordering::Relaxed);
+                    let gap = sent.saturating_sub(received);
                     eprintln!(
-                        "[Consumer {}/{}] Processed {} segments | Received: {} | Process memory: RSS={:.2} MB, VM={:.2} MB",
-                        consumer_id, num_consumers, next_expected_id / num_consumers, received, rss_mb, vm_mb
+                        "[Consumer {}/{}] Processed {} segments | Sent: {} | Received: {} | Gap: {} | RSS={:.2} MB, VM={:.2} MB",
+                        consumer_id,
+                        num_consumers,
+                        next_expected_id / num_consumers,
+                        sent,
+                        received,
+                        gap,
+                        rss_mb,
+                        vm_mb
                     );
                 }
             }
