@@ -5,6 +5,7 @@ mod primes_bases;
 mod random;
 mod scan;
 mod storage;
+mod storage_uring;
 
 use clap::{Parser, Subcommand};
 use std::sync::Arc;
@@ -49,6 +50,11 @@ enum Commands {
             help = "Number of consumer threads for parallel I/O (variation 9 only)"
         )]
         consumers: usize,
+        #[arg(
+            long,
+            help = "Use io_uring for async I/O (Linux 5.1+, variation 9 only, requires --binary)"
+        )]
+        async_io: bool,
     },
     #[command(about = "Find all prime numbers up to a given limit (storing all in memory)")]
     PrimesAllMem {
@@ -189,6 +195,7 @@ fn main() {
             workers,
             binary,
             consumers,
+            async_io,
         } => {
             let start = Instant::now();
 
@@ -334,18 +341,32 @@ fn main() {
                     let (tx, rx) = mpsc::sync_channel::<primes::SegmentPrimes>(CHANNEL_CAPACITY);
                     senders.push(tx);
 
-                    // Spawn consumer thread
+                    // Spawn consumer thread with appropriate I/O strategy
                     let total_received_clone = Arc::clone(&total_received);
                     let total_sent_clone = Arc::clone(&total_sent);
-                    let handle = thread::spawn(move || {
-                        storage::save_primes_multi_consumer_binary(
-                            rx,
-                            consumer_id,
-                            consumers,
-                            total_received_clone,
-                            total_sent_clone,
-                        )
-                    });
+                    let handle = if async_io {
+                        // Use io_uring for async I/O
+                        thread::spawn(move || {
+                            storage_uring::save_primes_multi_consumer_uring(
+                                rx,
+                                consumer_id,
+                                consumers,
+                                total_received_clone,
+                                total_sent_clone,
+                            )
+                        })
+                    } else {
+                        // Use standard sync I/O
+                        thread::spawn(move || {
+                            storage::save_primes_multi_consumer_binary(
+                                rx,
+                                consumer_id,
+                                consumers,
+                                total_received_clone,
+                                total_sent_clone,
+                            )
+                        })
+                    };
                     consumer_handles.push(handle);
                 }
 
